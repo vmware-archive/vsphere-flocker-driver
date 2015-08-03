@@ -4,11 +4,9 @@ from flocker.node.agents.blockdevice import (
     IBlockDeviceAPI, BlockDeviceVolume, _blockdevicevolume_from_dataset_id,
     _blockdevicevolume_from_blockdevice_id
 )
-#from flocker.common import get_all_ips
 from pyVmomi import vim, vmodl
 from pyVim.connect import SmartConnect, Disconnect
 
-from eliot import Message, Logger
 from twisted.python.filepath import FilePath
 from zope.interface import implementer
 from subprocess import check_output
@@ -86,9 +84,6 @@ def get_all_ips():
                 ips.add(address['addr'])
     return ips
 
-# Eliot is transitioning away from the "Logger instances all over the place"
-# approach.  And it's hard to put Logger instances on PRecord subclasses which
-# we have a lot of.  So just use this global logger for now.
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',level=logging.DEBUG)
 
 @implementer(IBlockDeviceAPI)
@@ -112,7 +107,6 @@ class VsphereBlockDeviceAPI(object):
         self._si = self._connect()
         
         content = self._si.RetrieveContent()
-        # dc - Datacenter
         for childEntity in content.rootFolder.childEntity:
            if childEntity.name == self._datacenter_name:
               self._dc = childEntity
@@ -186,7 +180,7 @@ class VsphereBlockDeviceAPI(object):
            path_name= directory  + "/volume-" + self._id_generator() + ".vmdk"
            logging.debug(path_name)
            new_disk = [virtualDiskManager.CreateVirtualDisk_Task(name=path_name, datacenter=self._dc, spec=fileBackedVirtualDiskSpec)]
-           self.WaitForTasks(new_disk, self._si)
+           self._wait_for_tasks(new_disk, self._si)
            logging.debug("VMDK created successfully")
            uuid = virtualDiskManager.QueryVirtualDiskUuid(name=path_name, datacenter=self._dc)
            logging.debug(str(uuid))
@@ -206,7 +200,7 @@ class VsphereBlockDeviceAPI(object):
 
         return volume
 
-    def WaitForTasks(self, tasks, si):
+    def _wait_for_tasks(self, tasks, si):
         """
         Given the service instance, si, and tasks, it returns after all the
         tasks are complete
@@ -254,31 +248,31 @@ class VsphereBlockDeviceAPI(object):
             if filter:
                filter.Destroy()
 
-    def findDatastore(self):
+    def _find_datastore(self):
         datastores = self._dc.datastore	
         for datastore in datastores:
            if datastore.name == self._datastore_name:
               return datastore
     
-    def find_all_vms(self):
+    def _find_all_vms(self):
         vmFolder = self._dc.vmFolder
         children = vmFolder.childEntity
         vms = []
         for child in children:
-           self.search_all_vms(child, vms)
+           self._search_all_vms(child, vms)
         print vms
         return vms
 
-    def search_all_vms(self, child, vms):
+    def _search_all_vms(self, child, vms):
         
         if hasattr(child, 'childEntity'):
            for child2 in child.childEntity:
-               self.search_all_vms(child2, vms)
+               self._search_all_vms(child2, vms)
         else: 
            vms.append(child)
         
     def destroy_volume(self, blockdevice_id):
-        datastore = self.findDatastore()
+        datastore = self._find_datastore()
         print datastore
         datastoreBrowser = datastore.browser
         vmDiskQuery = vim.host.DatastoreBrowser.VmDiskQuery()
@@ -286,7 +280,7 @@ class VsphereBlockDeviceAPI(object):
         searchSpec.query = [vmDiskQuery] 
  
         searchResultsTask = [datastoreBrowser.SearchDatastore_Task(datastorePath=self._flocker_volume_datastore_folder, searchSpec=searchSpec)]
-        self.WaitForTasks(searchResultsTask, self._si)
+        self._wait_for_tasks(searchResultsTask, self._si)
         searchResults =  searchResultsTask[0].info.result
         volume_paths = []
         for file in searchResults.file:
@@ -304,7 +298,7 @@ class VsphereBlockDeviceAPI(object):
             print blockdevice_id
             if unicode(uuid) == blockdevice_id:
                tasks = [virtualDiskManager.DeleteVirtualDisk_Task(name=volume_path, datacenter=self._dc)]
-               self.WaitForTasks(tasks, self._si)
+               self._wait_for_tasks(tasks, self._si)
                logging.debug("VMDK deleted successfully")
                break
                 
@@ -341,8 +335,8 @@ class VsphereBlockDeviceAPI(object):
 
 
     def list_volumes(self):
-        vms = self.find_all_vms()
-        datastore = self.findDatastore()
+        vms = self._find_all_vms()
+        datastore = self._find_datastore()
         print datastore
 
         datastoreBrowser = datastore.browser
@@ -367,7 +361,7 @@ class VsphereBlockDeviceAPI(object):
         searchSpec.details = fileDetails
         print searchSpec
         searchResultsTask = [datastoreBrowser.SearchDatastoreSubFolders_Task(datastorePath=self._flocker_volume_datastore_folder, searchSpec=searchSpec)]
-        self.WaitForTasks(searchResultsTask, self._si)
+        self._wait_for_tasks(searchResultsTask, self._si)
         searchResults =  searchResultsTask[0].info.result
         print searchResults
         
