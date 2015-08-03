@@ -1,0 +1,10 @@
+version: 1
+control-service:
+  hostname: "10.160.71.38"
+dataset:
+  backend: "vsphere_flocker_plugin"
+  vc_ip: "10.112.93.71"
+  username: "Administrator@vsphere.local"
+  password: "Admin!23"
+  datacenter_name: "Datacenter"
+  datastore_name: "vsanDatastore"
