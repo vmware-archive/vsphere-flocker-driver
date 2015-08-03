@@ -333,9 +333,7 @@ class VsphereBlockDeviceAPI(object):
         
         logging.debug("vsphere detach_volume: " + blockdevice_id)
 
-
-    def list_volumes(self):
-        vms = self._find_all_vms()
+    def _find_virtual_disks(self):
         datastore = self._find_datastore()
         print datastore
 
@@ -364,7 +362,12 @@ class VsphereBlockDeviceAPI(object):
         self._wait_for_tasks(searchResultsTask, self._si)
         searchResults =  searchResultsTask[0].info.result
         print searchResults
+        return searchResults       
+
+    def list_volumes(self):
+        vms = self._find_all_vms()
         
+        searchResults = self._find_virtual_disks()
         volume_paths = []
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
