@@ -86,8 +86,19 @@ def get_all_ips():
 
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',level=logging.DEBUG)
 
+class VsphereBlockDeviceVolume():
+   def __init__(self, blockDeviceVolume, path):
+       self.blockDeviceVolume = blockDeviceVolume
+       self.path = path
+       self.vm = None       
+       self.device = None
+
+   def __str__(self):
+       return "VsphereBlockDeviceVolume: {" + str(self.blockDeviceVolume) + ", path: " + self.path + ", vm: " + str(self.vm) + ", device: " + str(self.device) +  "}"
+
 @implementer(IBlockDeviceAPI)
 class VsphereBlockDeviceAPI(object):
+
     """
     A ``IBlockDeviceAPI`` which creates volumes (vmdks) with vsphere backend.
     """
@@ -159,8 +170,6 @@ class VsphereBlockDeviceAPI(object):
         logging.debug("vsphere allocation_unit: " + str(int(GiB(4).to_Byte().value)))
         return int(GiB(4).to_Byte().value)
 
-    def _id_generator(self, size=6, chars=string.ascii_uppercase + string.digits):
-        return ''.join(random.choice(chars) for _ in range(size))
     
     def create_volume(self, dataset_id, size):
         content = self._si.RetrieveContent()
@@ -174,10 +183,7 @@ class VsphereBlockDeviceAPI(object):
         fileBackedVirtualDiskSpec.diskType = 'thick'
         uuid = ''
         try:
-           directory = self._flocker_volume_datastore_folder + str(dataset_id)
-           fileManager = content.fileManager
-           fileManager.MakeDirectory(name=directory, datacenter=self._dc, createParentDirectories=True)
-           path_name= directory  + "/volume-" + self._id_generator() + ".vmdk"
+           path_name=  self._flocker_volume_datastore_folder  + str(dataset_id) + ".vmdk"
            logging.debug(path_name)
            new_disk = [virtualDiskManager.CreateVirtualDisk_Task(name=path_name, datacenter=self._dc, spec=fileBackedVirtualDiskSpec)]
            self._wait_for_tasks(new_disk, self._si)
@@ -186,6 +192,7 @@ class VsphereBlockDeviceAPI(object):
            logging.debug(str(uuid))
         except vmodl.MethodFault, e:
            logging.error("Caught vmodl fault : " + str(e))
+           raise Exception("Cannot create volume because of vmodl fault " + str(e))
 
         uuid = uuid.translate(None, ' -')
         logging.debug(uuid)
@@ -254,6 +261,11 @@ class VsphereBlockDeviceAPI(object):
            if datastore.name == self._datastore_name:
               return datastore
     
+    def _find_vm(self, moid):
+        for vm in self._find_all_vms():
+            if unicode(vm._moId) == moid:
+               return vm
+
     def _find_all_vms(self):
         vmFolder = self._dc.vmFolder
         children = vmFolder.childEntity
@@ -266,76 +278,120 @@ class VsphereBlockDeviceAPI(object):
     def _search_all_vms(self, child, vms):
         
         if hasattr(child, 'childEntity'):
-           for child2 in child.childEntity:
-               self._search_all_vms(child2, vms)
+           for childEntity in child.childEntity:
+               self._search_all_vms(childEntity, vms)
         else: 
            vms.append(child)
         
+    def _get_vsphere_blockdevice_volume(self, blockdevice_id):
+       
+       vol_list = self._list_vsphere_volumes()
+       if not blockdevice_id in vol_list.keys():
+          logging.error("Volume not found for blockdevice_id : " + blockdevice_id)
+          raise UnknownVolume(blockdevice_id)
+
+       return vol_list[blockdevice_id]
+
     def destroy_volume(self, blockdevice_id):
-        datastore = self._find_datastore()
-        print datastore
-        datastoreBrowser = datastore.browser
-        vmDiskQuery = vim.host.DatastoreBrowser.VmDiskQuery()
-        searchSpec = vim.host.DatastoreBrowser.SearchSpec()
-        searchSpec.query = [vmDiskQuery] 
- 
-        searchResultsTask = [datastoreBrowser.SearchDatastore_Task(datastorePath=self._flocker_volume_datastore_folder, searchSpec=searchSpec)]
-        self._wait_for_tasks(searchResultsTask, self._si)
-        searchResults =  searchResultsTask[0].info.result
-        volume_paths = []
-        for file in searchResults.file:
-            volume_paths.append(searchResults.folderPath + file.path)
-        print volume_paths
-        
+
+        vsphere_volume = self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is not None:
+           logging.error("Volume is attached to a vm so cannot destroy.")
+           raise VolumeAttached(blockdevice_id)
+
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
-        for volume_path in volume_paths:
-            uuid = virtualDiskManager.QueryVirtualDiskUuid(name=volume_path, datacenter=self._dc)
-            print uuid
-	    uuid = uuid = uuid.translate(None, ' -')
-            print uuid
-            print unicode(uuid)
-            print blockdevice_id
-            if unicode(uuid) == blockdevice_id:
-               tasks = [virtualDiskManager.DeleteVirtualDisk_Task(name=volume_path, datacenter=self._dc)]
-               self._wait_for_tasks(tasks, self._si)
-               logging.debug("VMDK deleted successfully")
-               break
-                
+        tasks = [virtualDiskManager.DeleteVirtualDisk_Task(name=vsphere_volume.path, datacenter=self._dc)]
+        self._wait_for_tasks(tasks, self._si)
+        logging.debug("VMDK deleted successfully")
         logging.debug("vsphere destroy_volume: " + str(blockdevice_id))
         
-
-
+        
     def attach_volume(self, blockdevice_id, attach_to):
        
-        volume = self.volume_list[str(blockdevice_id)]
-        attached_volume = volume.set(attached_to=unicode(attach_to))
-        self.volume_list[str(blockdevice_id)] = attached_volume
+        vm = self._find_vm(attach_to)
+        print vm
+
+        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is not None:
+           logging.error("Volume is attached to a vm so cannot attach.")
+           raise AlreadyAttachedVolume(blockdevice_id)
+        
+        spec = vim.vm.ConfigSpec()
+        # get all disks on a VM, set unit_number to the next available
+        for dev in vm.config.hardware.device:
+            if hasattr(dev.backing, 'fileName'):
+                unit_number = int(dev.unitNumber) + 1
+                # unit_number 7 reserved for scsi controller
+                if unit_number == 7:
+                    unit_number += 1
+                if unit_number >= 16:
+                    print "we don't support this many disks"
+                    raise Exception("VM doesn't support more than 15 disks")
+
+            if isinstance(dev, vim.vm.device.VirtualSCSIController):
+                controller = dev
+        
+        dev_changes = []
+        new_disk_kb = int(Byte(vsphere_volume.blockDeviceVolume.size).to_KiB().value)
+        disk_spec = vim.vm.device.VirtualDeviceSpec()
+        disk_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+        
+        disk_spec.device = vim.vm.device.VirtualDisk()
+        disk_spec.device.backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
+        disk_spec.device.backing.thinProvisioned = False
+        disk_spec.device.backing.diskMode = 'persistent'
+        disk_spec.device.backing.fileName = vsphere_volume.path
+        disk_spec.device.unitNumber = unit_number
+
+        disk_spec.device.capacityInKB = new_disk_kb
+        disk_spec.device.controllerKey = controller.key
+        dev_changes.append(disk_spec)
+        spec.deviceChange = dev_changes
+        tasks = [vm.ReconfigVM_Task(spec=spec)]
+        self._wait_for_tasks(tasks, self._si)
+
+        volume = vsphere_volume.blockDeviceVolume
+        attached_volume = volume.set('attached_to', unicode(attach_to))
         
         logging.debug("attached_to=" + attached_volume.attached_to)
         logging.debug("vsphere attach_volume: " + str(blockdevice_id) + " : " + attach_to)
-
+        print attached_volume       
+        
+        self._rescan_scsi()
         return attached_volume
 
+    def _rescan_scsi(self):
+        print check_output(["rescan-scsi-bus", "-r"])
 
     def detach_volume(self, blockdevice_id):
-        """
-        :param: volume id = blockdevice_id
-        :raises: unknownvolume exception if not found
-        """
-        volume = self.volume_list[str(blockdevice_id)]
-	if volume.attached_to is not None:
-            detached_volume = volume.set(attached_to=None)
-            self.volume_list[str(blockdevice_id)] = detached_volume
-        else:
-            logging.debug("Volume" + blockdevice_id + "not attached")
-            raise UnattachedVolume(blockdevice_id)
-        
+
+        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is None:
+           logging.debug("Volume " + blockdevice_id + " not attached")
+           raise UnattachedVolume(blockdevice_id)
+
+        vm = vsphere_volume.vm
+        spec = vim.vm.ConfigSpec()
+        dev_changes = []
+
+        disk_spec = vim.vm.device.VirtualDeviceSpec()
+        disk_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+        disk_spec.device = vsphere_volume.device
+        dev_changes.append(disk_spec)
+        spec.deviceChange = dev_changes
+
+        tasks = [vm.ReconfigVM_Task(spec=spec)]
+        self._wait_for_tasks(tasks, self._si)
+
+        volume = vsphere_volume.blockDeviceVolume
+        detached_volume = volume.set('attached_to', None)
+
+        self._rescan_scsi()
         logging.debug("vsphere detach_volume: " + blockdevice_id)
 
     def _find_virtual_disks(self):
         datastore = self._find_datastore()
-        print datastore
 
         datastoreBrowser = datastore.browser
         vmDiskQuery = vim.host.DatastoreBrowser.VmDiskQuery()
@@ -357,39 +413,28 @@ class VsphereBlockDeviceAPI(object):
         
         searchSpec.query = [vmDiskQuery]
         searchSpec.details = fileDetails
-        print searchSpec
         searchResultsTask = [datastoreBrowser.SearchDatastoreSubFolders_Task(datastorePath=self._flocker_volume_datastore_folder, searchSpec=searchSpec)]
         self._wait_for_tasks(searchResultsTask, self._si)
         searchResults =  searchResultsTask[0].info.result
-        print searchResults
+        logging.debug("_find_virtual_disks : " + str(searchResults))
         return searchResults       
 
-    def list_volumes(self):
+    def _list_vsphere_volumes(self):
         vms = self._find_all_vms()
         
         searchResults = self._find_virtual_disks()
-        volume_paths = []
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
 
-        block_device_ids = []
         vol_list = {}
         for result in searchResults:
             for file in result.file:
                 print file
                 volume_path = result.folderPath + file.path
                 disk_uuid = virtualDiskManager.QueryVirtualDiskUuid(name=volume_path, datacenter=self._dc)
-                print disk_uuid
                 disk_uuid = disk_uuid.translate(None, ' -')
-                print disk_uuid
-                block_device_ids.append(disk_uuid)
-                print block_device_ids
-                tokens = volume_path.split('/')
-                print tokens
-                if len(tokens) != 3:
-                   # dataset_id is the folder name for the vmdk which is not present so we just skip
-                   continue
-                str_dataset_id = tokens[1]
+                str_dataset_id = file.path
+                str_dataset_id = str_dataset_id[:-5]
                 print str_dataset_id
                 dataset_id = uuid.UUID(str_dataset_id)
                 print dataset_id
@@ -398,22 +443,32 @@ class VsphereBlockDeviceAPI(object):
                            size=int(KiB(file.capacityKb).to_Byte().value),
                            dataset_id=dataset_id,
                            blockdevice_id=unicode(disk_uuid))
-
+                vsphere_volume = VsphereBlockDeviceVolume(blockDeviceVolume=volume,
+                                      path=volume_path)
                 for vm in vms:
                     devices = vm.config.hardware.device
                     for device in devices:
                        if hasattr(device.backing, 'diskMode'):
                           diskUuid = device.backing.uuid
-                          print diskUuid
                           diskUuid = diskUuid.translate(None, ' -')
-                          print diskUuid
                           if diskUuid == disk_uuid:
-                              volume.set(attached_to=unicode(vm._moId))
-                              
-        vol_list[disk_uuid] = volume 
+                              volume = volume.set('attached_to', unicode(vm._moId))
+                              vsphere_volume.blockDeviceVolume = volume
+                              vsphere_volume.vm = vm
+                              vsphere_volume.device = device
+                              break
+
+                print str(vsphere_volume)                              
+                vol_list[unicode(disk_uuid)] = vsphere_volume 
+        
+        print str(vol_list)
+        return vol_list
+        
+    def list_volumes(self):
+        vol_list = self._list_vsphere_volumes()
         volumes = []
         for volume in vol_list.values():
-            volumes.append(volume)
+            volumes.append(volume.blockDeviceVolume)
 
         print volumes
         logging.debug("vsphere list_volumes: " + str(volumes))
@@ -448,9 +503,11 @@ def main():
         datacenter_name="Datacenter",
         datastore_name="vsanDatastore")
    #vs.create_volume(dataset_id=uuid.uuid4(), size=21474836480)
+   #vs.attach_volume(blockdevice_id=unicode('6000C29ff4c93600e6235f5123dbf154'), attach_to=unicode('vm-152'))
    #vs.compute_instance_id()
-   #vs.destroy_volume(unicode('6000C293807dc7338ce125214e8cb98d'))
-   vs.list_volumes()
+   vs.detach_volume(unicode('6000C29ff4c93600e6235f5123dbf154'))
+   #vs.destroy_volume(unicode('6000C2915c5df0c12ff0372b8bfb244f'))
+   #vs.list_volumes()
 
 if __name__ == '__main__':
     main()
