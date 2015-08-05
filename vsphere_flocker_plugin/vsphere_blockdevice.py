@@ -195,6 +195,7 @@ class VsphereBlockDeviceAPI(object):
            raise Exception("Cannot create volume because of vmodl fault " + str(e))
 
         uuid = uuid.translate(None, ' -')
+        uuid = uuid.lower()
         logging.debug(uuid)
         volume = BlockDeviceVolume(
                   size=size, 
@@ -417,6 +418,7 @@ class VsphereBlockDeviceAPI(object):
         self._wait_for_tasks(searchResultsTask, self._si)
         searchResults =  searchResultsTask[0].info.result
         logging.debug("_find_virtual_disks : " + str(searchResults))
+        print searchResults
         return searchResults       
 
     def _list_vsphere_volumes(self):
@@ -433,6 +435,7 @@ class VsphereBlockDeviceAPI(object):
                 volume_path = result.folderPath + file.path
                 disk_uuid = virtualDiskManager.QueryVirtualDiskUuid(name=volume_path, datacenter=self._dc)
                 disk_uuid = disk_uuid.translate(None, ' -')
+                disk_uuid = disk_uuid.lower()
                 str_dataset_id = file.path
                 str_dataset_id = str_dataset_id[:-5]
                 print str_dataset_id
@@ -451,6 +454,7 @@ class VsphereBlockDeviceAPI(object):
                        if hasattr(device.backing, 'diskMode'):
                           diskUuid = device.backing.uuid
                           diskUuid = diskUuid.translate(None, ' -')
+                          diskUuid = diskUuid.lower()
                           if diskUuid == disk_uuid:
                               volume = volume.set('attached_to', unicode(vm._moId))
                               vsphere_volume.blockDeviceVolume = volume
@@ -474,14 +478,56 @@ class VsphereBlockDeviceAPI(object):
         logging.debug("vsphere list_volumes: " + str(volumes))
         return volumes
 
+    def _find_all_disk_devices(self):
+        output = check_output(["lsblk", "-d", "-o", "KNAME,TYPE"])
+        print output
+        lines = output.split("\n")
+        print lines
+        devices = []
+        # remove 1st entry [KNAME, TYPE]
+        del lines[0]
+        # remove last empty entry
+        del lines[-1]
+        # extract only those devices where type = disk
+        print lines
+        for line in lines:
+           data = line.split()
+           #if(data[1] == "disk"):
+           devices.append("/dev/" + data[0])
+        
+        print devices
+        return devices
+        
+               
     def get_device_path(self, blockdevice_id):
         """
         :param blockdevice_id:
         :return:the device path
         """
-        logging.debug("vsphere get_device_path : " + str(blockdevice_id) + " : " + str(FilePath('/dev/sdc')))
+        devices = self._find_all_disk_devices()
+        for device in devices:   
+           try:
+              output = check_output(["scsiinfo", "-s", device])
+              print output
+           except:
+              print "Error occured for scsiinfo -s " + device
+              continue
+           serial_id_line_index  = output.find("'")
+           print serial_id_line_index
+           if serial_id_line_index < 0:
+              print "No serial id found for device : " + device
+              continue
+           serial_id = output[serial_id_line_index:]
+           print serial_id
+           uid = serial_id.translate(None, " '\n")
+           print uid
+           print blockdevice_id
+           print str(uid) == str(blockdevice_id)
+           if str(uid)==str(blockdevice_id):
+              print "Found device path : " + device
+              return FilePath(device)
 
-        return FilePath('/dev/sdc')
+        raise Exception("No device path found")
 
 
 def vsphere_from_configuration(cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
@@ -502,12 +548,20 @@ def main():
         password=u'Admin!23',
         datacenter_name="Datacenter",
         datastore_name="vsanDatastore")
-   #vs.create_volume(dataset_id=uuid.uuid4(), size=21474836480)
-   #vs.attach_volume(blockdevice_id=unicode('6000C29ff4c93600e6235f5123dbf154'), attach_to=unicode('vm-152'))
+   volume = vs.create_volume(dataset_id=uuid.uuid4(), size=21474836480)
+   vs.list_volumes()
+   vm = vs.compute_instance_id()
+   vs.attach_volume(blockdevice_id=volume.blockdevice_id, attach_to=vm)
+   vs.list_volumes()
+   vs.get_device_path(volume.blockdevice_id)
+   #unicode('6000c29efe6df3d5ae7babe6ef9dea74'))
    #vs.compute_instance_id()
-   vs.detach_volume(unicode('6000C29ff4c93600e6235f5123dbf154'))
-   #vs.destroy_volume(unicode('6000C2915c5df0c12ff0372b8bfb244f'))
-   #vs.list_volumes()
+   vs.detach_volume(volume.blockdevice_id)
+   vs.list_volumes()
+   vs.destroy_volume(volume.blockdevice_id)
+   #unicode('6000C2915c5df0c12ff0372b8bfb244f'))
+   vs.list_volumes()
+   #vs.get_device_path(unicode('6000c29efe6df3d5ae7babe6ef9dea74'))
 
 if __name__ == '__main__':
     main()
