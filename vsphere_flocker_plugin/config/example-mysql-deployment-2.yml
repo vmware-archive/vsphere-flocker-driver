@@ -1,0 +1,6 @@
+"version": 1
+"nodes":
+  "10.160.71.38": []
+  "10.160.82.141": ["mysql-volume-example-5"]
+
+  

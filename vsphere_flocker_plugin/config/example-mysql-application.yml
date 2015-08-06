@@ -1,0 +1,14 @@
+"version": 1
+"applications":
+  "mysql-volume-example-5":
+    "image": "mysql:5.6.17"
+    "environment":
+      "MYSQL_ROOT_PASSWORD": "clusterhq"
+    "ports":
+    - "internal": 3306
+      "external": 3306
+    "volume":
+      # The location within the container where the data
+      # volume will be mounted:
+      "mountpoint": "/var/lib/mysql"
+      "maximum_size": "20G"
