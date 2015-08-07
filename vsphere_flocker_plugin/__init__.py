@@ -3,12 +3,13 @@ from vsphere_flocker_plugin.vsphere_blockdevice import vsphere_from_configuratio
 
 
 def api_factory(cluster_id, **kwargs):
-    return vsphere_from_configuration(cluster_id=cluster_id, 
-        vc_ip=kwargs[u'vc_ip'],
-        username=kwargs[u'username'],
-        password=kwargs[u'password'],
-        datacenter_name=kwargs[u'datacenter_name'],
-        datastore_name=kwargs[u'datastore_name'])
+    return vsphere_from_configuration(cluster_id=cluster_id,
+                                      vc_ip=kwargs[u'vc_ip'],
+                                      username=kwargs[u'username'],
+                                      password=kwargs[u'password'],
+                                      datacenter_name=kwargs[
+                                          u'datacenter_name'],
+                                      datastore_name=kwargs[u'datastore_name'])
 
 
 FLOCKER_BACKEND = BackendDescription(
