@@ -35,11 +35,41 @@ class VmNotFound(Exception):
     Local vm instance not found in VC
     """
 
-class VolumeCreation(Exception):
+class VolumeCreationFailure(Exception):
     """
     Volume creation failed
     """
-   
+
+class UnknownVm(Exception):
+    """
+    VM not found
+    """
+
+class VolumeDestroyFailure(Exception):
+    """
+    destroy volume failed
+    """
+
+class VolumeAttachFailure(Exception):
+    """
+    attach volume failed 
+    """
+
+class VolumeDetachFailure(Exception):
+    """
+    detach volume failed
+    """
+
+class ListVolumesFailure(Exception):
+    """
+    list volumes failed
+    """
+
+class GetDevicePathFailure(Exception):
+    """
+    get_device_path failed
+    """
+
 def get_all_ips():
     """
     Find all IPs for this machine.
@@ -167,6 +197,7 @@ class VsphereBlockDeviceAPI(object):
         :param UUID dataset_id: The Flocker dataset ID of the dataset on this
             volume.
         :param int size: The size of the new volume in bytes.
+        :raises VolumeCreationFailure: If the volume creation fails with some error.
         :returns: A ``BlockDeviceVolume``.
         """
         
@@ -179,8 +210,7 @@ class VsphereBlockDeviceAPI(object):
            logging.debug("capacityKb = " + str(fileBackedVirtualDiskSpec.capacityKb))
            fileBackedVirtualDiskSpec.adapterType = 'lsiLogic'
            fileBackedVirtualDiskSpec.diskType = 'thick'
-           uuid = ''
-
+           
            path_name=  self._flocker_volume_datastore_folder  + str(dataset_id) + ".vmdk"
            logging.debug(path_name)
            new_disk = [virtualDiskManager.CreateVirtualDisk_Task(name=path_name, datacenter=self._dc, spec=fileBackedVirtualDiskSpec)]
@@ -190,7 +220,7 @@ class VsphereBlockDeviceAPI(object):
            logging.debug(str(uuid))
         except Exception as e:
            logging.error("Cannot create volume because of exception : " + str(e))
-           raise VolumeCreation(e)
+           raise VolumeCreationFailure(e)
 
         uuid = self._normalize_uuid(uuid)
         logging.debug(uuid)
@@ -285,32 +315,39 @@ class VsphereBlockDeviceAPI(object):
           raise UnknownVolume(blockdevice_id)
 
        return vol_list[blockdevice_id]
-
-    def destroy_volume(self, blockdevice_id):
-
-        vsphere_volume = self._get_vsphere_blockdevice_volume(blockdevice_id)
-        if vsphere_volume.blockDeviceVolume.attached_to is not None:
-           logging.error("Volume is attached to a vm so cannot destroy.")
-           raise VolumeAttached(blockdevice_id)
-
+    
+    def _delete_vmdk(self, vsphere_volume):
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
         tasks = [virtualDiskManager.DeleteVirtualDisk_Task(name=vsphere_volume.path, datacenter=self._dc)]
         self._wait_for_tasks(tasks, self._si)
         logging.debug("VMDK deleted successfully")
         logging.debug("vsphere destroy_volume: " + str(blockdevice_id))
-        
-        
-    def attach_volume(self, blockdevice_id, attach_to):
-       
-        vm = self._find_vm(attach_to)
-        logging.debug(str(vm))
-
-        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+               
+    def destroy_volume(self, blockdevice_id):
+        """
+        Destroy an existing volume.
+        :param unicode blockdevice_id: The unique identifier for the volume to
+            destroy.
+        :raises UnknownVolume: If the supplied ``blockdevice_id`` does not
+            exist.
+        :raises VolumeAttached: If the volume is attached to any vm.
+        :raise VolumeDestroFailure: If destroy volume fails with some error.
+        :return: ``None``
+        """
+        vsphere_volume = self._get_vsphere_blockdevice_volume(blockdevice_id)
         if vsphere_volume.blockDeviceVolume.attached_to is not None:
-           logging.error("Volume is attached to a vm so cannot attach.")
-           raise AlreadyAttachedVolume(blockdevice_id)
+           logging.error("Volume is attached to a vm so cannot destroy.")
+           raise VolumeAttached(blockdevice_id)
         
+        try:
+           self._delete_vmdk(vsphere_volume)
+        except Exception as e:
+           logging.error("Destroy volume failed due to error " + str(e))
+           raise VolumeDestroyFailure(e)
+
+       
+    def _attach_vmdk(self, vm, vsphere_volume):
         spec = vim.vm.ConfigSpec()
         # get all disks on a VM, set unit_number to the next available
         for dev in vm.config.hardware.device:
@@ -346,27 +383,64 @@ class VsphereBlockDeviceAPI(object):
         self._wait_for_tasks(tasks, self._si)
 
         volume = vsphere_volume.blockDeviceVolume
-        attached_volume = volume.set('attached_to', unicode(attach_to))
+        attached_volume = volume.set('attached_to', unicode(vm._moId))
+        return attached_volume
         
+    def attach_volume(self, blockdevice_id, attach_to):
+        """
+        Attach ``blockdevice_id`` to the node indicated by ``attach_to``.
+        :param unicode blockdevice_id: The unique identifier for the block
+            device being attached.
+        :param unicode attach_to: An identifier like the one returned by the
+            ``compute_instance_id`` method indicating the node to which to
+            attach the volume.
+        :raises UnknownVolume: If the supplied ``blockdevice_id`` does not
+            exist.
+        :raises AlreadyAttachedVolume: If the supplied ``blockdevice_id`` is
+            already attached.
+        :raises UnknownVm: If the supplied ``attach_to`` vm does not
+            exist.
+        :raises VolumeAttachFailure: If the attach volume failed with some error.
+            exist.
+        :returns: A ``BlockDeviceVolume`` with a ``attached_to`` attribute set
+            to ``attach_to``.
+        """
+        vm = self._find_vm(attach_to)
+        if vm is None:
+           raise UnknownVm("VM not found " + str(attach_to))
+
+        logging.debug(str(vm))
+
+        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is not None:
+           logging.error("Volume is attached to a vm so cannot attach.")
+           raise AlreadyAttachedVolume(blockdevice_id)
+        
+
+        try:
+           attached_volume = self._attach_vmdk(vm, vsphere_volume)
+        except Exception as e:
+           logging.error("Cannot attach volume because of exception : " + str(e))
+           raise VolumeAttachFailure(e)
+ 
+       
         logging.debug("attached_to=" + attached_volume.attached_to)
         logging.debug("vsphere attach_volume: " + str(blockdevice_id) + " : " + attach_to)
         logging.debug(str(attached_volume))
 
-        logging.debug("Rescanning scsi bug for attached disk")
+        logging.debug("Rescanning scsi bus for attached disk")
         self._rescan_scsi()
         return attached_volume
 
     def _rescan_scsi(self):
-        output = check_output(["rescan-scsi-bus", "-r"])
-        logging.debug(output)
+        try:
+           output = check_output(["rescan-scsi-bus", "-r"])
+           logging.debug(output)
+        except Exception as e:
+           ''' Don't throw error during rescan-scsi-bus '''
+           logging.warn("Rescan scsi bus failed.")
 
-    def detach_volume(self, blockdevice_id):
-
-        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
-        if vsphere_volume.blockDeviceVolume.attached_to is None:
-           logging.debug("Volume " + blockdevice_id + " not attached")
-           raise UnattachedVolume(blockdevice_id)
-
+    def _detach_vmdk(self, vsphere_volume):
         vm = vsphere_volume.vm
         spec = vim.vm.ConfigSpec()
         dev_changes = []
@@ -382,7 +456,32 @@ class VsphereBlockDeviceAPI(object):
 
         volume = vsphere_volume.blockDeviceVolume
         detached_volume = volume.set('attached_to', None)
+        return detached_volume
 
+       
+    def detach_volume(self, blockdevice_id):
+        """
+        Detach ``blockdevice_id`` from whatever host it is attached to.
+        :param unicode blockdevice_id: The unique identifier for the block
+            device being detached.
+        :raises UnknownVolume: If the supplied ``blockdevice_id`` does not
+            exist.
+        :raises UnattachedVolume: If the supplied ``blockdevice_id`` is
+            not attached to anything.
+        :raises VolumeDetachFailure: If volume detach fails due to some error
+        :returns: ``None``
+        """
+        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is None:
+           logging.debug("Volume " + blockdevice_id + " not attached")
+           raise UnattachedVolume(blockdevice_id)
+
+        try:
+           detached_volume = self._detach_vmdk(vsphere_volume)
+        except Exception as e:
+           logging.error("Detach volume failed with error: " + str(e))
+           raise VolumeDetachFailure(e)
+          
         self._rescan_scsi()
         logging.debug("vsphere detach_volume: " + blockdevice_id)
 
@@ -461,17 +560,27 @@ class VsphereBlockDeviceAPI(object):
         return vol_list
         
     def list_volumes(self):
-        logging.debug("starting list volumes")
-        start_time = time.time()
-        vol_list = self._list_vsphere_volumes()
-        volumes = []
-        for volume in vol_list.values():
-            volumes.append(volume.blockDeviceVolume)
+        """
+        List all the block devices available via the back end API.
+        :raises ListVolumesFailure : If list volumes failed due to some error
+        :returns: A ``list`` of ``BlockDeviceVolume``s.
+        """
+        try:
+           logging.debug("starting list volumes")
+           start_time = time.time()
+           vol_list = self._list_vsphere_volumes()
+           volumes = []
+           for volume in vol_list.values():
+               volumes.append(volume.blockDeviceVolume)
 
-        logging.debug("vsphere list_volumes: " + str(volumes))
-        logging.debug(start_time)
-        logging.debug("Took %s seconds" % (time.time() - start_time)) 
-        return volumes
+           logging.debug("vsphere list_volumes: " + str(volumes))
+           logging.debug(start_time)
+           logging.debug("Took %s seconds" % (time.time() - start_time)) 
+           return volumes
+        except Exception as e:
+           logging.error("List volumes failed with error: " + str(e))
+           raise ListVolumesFailure(e)
+
 
     def _find_all_disk_devices(self):
         output = check_output(["lsblk", "-d", "-o", "KNAME,TYPE"])
@@ -496,31 +605,48 @@ class VsphereBlockDeviceAPI(object):
                
     def get_device_path(self, blockdevice_id):
         """
-        :param blockdevice_id:
-        :return:the device path
+        Return the device path that has been allocated to the block device on
+        the host to which it is currently attached.
+        :param unicode blockdevice_id: The unique identifier for the block
+            device.
+        :raises UnknownVolume: If the supplied ``blockdevice_id`` does not
+            exist.
+        :raises UnattachedVolume: If the supplied ``blockdevice_id`` is
+            not attached to a host.
+        :raises GetDevicePathFailure: If get_device_path fails due to some error
+        :returns: A ``FilePath`` for the device.
         """
-        devices = self._find_all_disk_devices()
-        for device in devices:   
-           try:
-              output = check_output(["scsiinfo", "-s", device])
-              logging.debug(output)
-           except:
-              logging.error("Error occured for scsiinfo -s " + device)
-              continue
-           serial_id_line_index  = output.find("'")
-           if serial_id_line_index < 0:
-              logging.debug("No serial id found for device : " + device)
-              continue
-           serial_id = output[serial_id_line_index:]
-           logging.debug(serial_id)
-           uid = self._normalize_uuid(serial_id)           
-           logging.debug(uid)
-           logging.debug(blockdevice_id)
-           if str(uid)==str(blockdevice_id):
-              logging.debug("Found device path : " + device)
-              return FilePath(device)
+        vsphere_volume =  self._get_vsphere_blockdevice_volume(blockdevice_id)
+        if vsphere_volume.blockDeviceVolume.attached_to is None:
+           logging.error("Volume is not attached to a vm.")
+           raise UnattachedVolume(blockdevice_id)
 
-        raise Exception("No device path found")
+        try:
+           devices = self._find_all_disk_devices()
+           for device in devices:   
+              try:
+                 output = check_output(["scsiinfo", "-s", device])
+                 logging.debug(output)
+              except:
+                 logging.error("Error occured for scsiinfo -s " + device)
+                 continue
+              serial_id_line_index  = output.find("'")
+              if serial_id_line_index < 0:
+                 logging.debug("No serial id found for device : " + device)
+                 continue
+              serial_id = output[serial_id_line_index:]
+              logging.debug(serial_id)
+              uid = self._normalize_uuid(serial_id)           
+              logging.debug(uid)
+              logging.debug(blockdevice_id)
+              if str(uid)==str(blockdevice_id):
+                  logging.debug("Found device path : " + device)
+                  return FilePath(device)
+        except Exception as e:
+           logging.error("Get device path failed with error : " + str(e))
+           raise GetDevicePathFailure(e)           
+
+        raise GetDevicePathFailure("No device path found")
 
 
 def vsphere_from_configuration(cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
