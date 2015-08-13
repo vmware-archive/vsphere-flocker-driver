@@ -1,3 +1,6 @@
+'''
+Copyright 2015 VMware, Inc.  All rights reserved.  Licensed under the Apache v2 License.
+'''
 from flocker.node.agents.blockdevice import (
     VolumeException, AlreadyAttachedVolume,
     UnknownVolume, UnattachedVolume,

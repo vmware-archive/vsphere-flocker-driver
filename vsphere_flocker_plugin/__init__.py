@@ -1,3 +1,6 @@
+'''
+Copyright 2015 VMware, Inc.  All rights reserved.  Licensed under the Apache v2 License.
+'''
 from flocker.node import BackendDescription, DeployerType
 from vsphere_flocker_plugin.vsphere_blockdevice import vsphere_from_configuration
 
