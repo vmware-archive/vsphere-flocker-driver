@@ -136,7 +136,7 @@ class VsphereBlockDeviceAPI(object):
         logging.debug("vsphere __init__ : " + str(self._cluster_id) + ": " + self._vc_ip + ": " + self._username + ": " + self._password +
                       ": " + self._datacenter_name + ": " + self._datastore_name)
 
-        self._si = self._connect()
+        self._connect()
 
         content = self._si.RetrieveContent()
         for childEntity in content.rootFolder.childEntity:
@@ -156,13 +156,12 @@ class VsphereBlockDeviceAPI(object):
         try:
             # Connect to VC
             # si - the root object of inventory
-            si = SmartConnect(host=self._vc_ip, port=443,
+            self._si = SmartConnect(host=self._vc_ip, port=443,
                               user=self._username, pwd=self._password)
-        except vmodl.MethodFault, e:
+        except vmodl.MethodFault as e:
             logging.error("Connection to VC failed with error : " + str(e))
             raise VcConnection(e)
-
-        return si
+        
 
     def compute_instance_id(self):
         """
