@@ -5,14 +5,14 @@
 ## Installation
 
 ### Pre-requisites:
-  - Setup VSAN cluster on your VC. (Minimum 3 ESXi hosts)
-  - Let the name of the vsan datastore be say: `vsanDatastore`
+  - Setup a shared datastore on your VC.
+  - Let the name of the datastore be say: `vsphereDatastore`
   - Create directory with name "FLOCKER" on this datastore. Flocker volumes will reside in this path.
-    `[vsanDatastore]/FLOCKER`
+    `[vsphereDatastore]FLOCKER`
 
 ### Install:
 
-- Deploy Ubuntu VMs (which you will use as Flocker nodes) on VSAN cluster.
+- Deploy Ubuntu VMs (which you will use as Flocker nodes) on ESXi hosts with `vsphereDatastore` as the shared datastore.
   - Power off these VMs and enable disk uuid on these VMs by adding following to the vmx files.
    ```bash
    disk.EnableUUID​ = "TRUE"
@@ -43,7 +43,7 @@ dataset:
   username: "{VC_Username}"
   password: "{VC_Password}"
   datacenter_name: "Datacenter"           # VC datacenter name
-  datastore_name: "vsanDatastore"         # VC VSAN datastore name as above
+  datastore_name: "vsphereDatastore"         # VC datastore name as above
 ```
 
 Please see configuration examples in the [config directory](vsphere_flocker_plugin/config/).
