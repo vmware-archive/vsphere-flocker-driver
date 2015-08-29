@@ -1,6 +1,6 @@
 # [VMware vSphere®](http://www.vmware.com/products/vsphere) [Flocker](https://clusterhq.com/flocker/introduction/) Driver
 
-[ClusterHQ](https://clusterhq.com)'s [Flocker](https://clusterhq.com/flocker/introduction/) provides an efficient and easy way to connect persistent store with [Docker](http://docker.com) containers. This project provides a plugin to provision persistent data volumes on VMware's vSphere storage backend.
+[ClusterHQ](https://clusterhq.com)'s [Flocker](https://clusterhq.com/flocker/introduction/) provides an efficient and easy way to connect persistent storage with [Docker](http://docker.com) containers. This project provides a plugin to provision persistent data volumes on VMware's vSphere storage datastores (VMFS, NFS, VSAN, VVOL).
 
 ## Installation
 
