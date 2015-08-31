@@ -11,7 +11,7 @@ setup(
     package_data={
         "vsphere_flocker_plugin": ["config/*"],
     },
-    version="0.1",
+    version="1.0",
     description="VMware vSphere Storage Plugin for ClusterHQ/Flocker.",
     author="Pratik Gupta",
     author_email="pratik.gupta1088@gmail.com",
