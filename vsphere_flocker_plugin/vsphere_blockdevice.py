@@ -572,19 +572,21 @@ class VsphereBlockDeviceAPI(object):
                 vsphere_volume = VsphereBlockDeviceVolume(blockDeviceVolume=volume,
                                                           path=volume_path)
                 for vm in vms:
-                    devices = vm.config.hardware.device
-                    for device in devices:
-                        if hasattr(device.backing, 'diskMode'):
-                            device_disk_uuid = device.backing.uuid
-                            device_disk_uuid = self._normalize_uuid(
-                                device_disk_uuid)
-                            if device_disk_uuid == disk_uuid:
-                                volume = volume.set(
-                                    'attached_to', unicode(vm._moId))
-                                vsphere_volume.blockDeviceVolume = volume
-                                vsphere_volume.vm = vm
-                                vsphere_volume.device = device
-                                break
+                    if isinstance(vm, vim.VirtualMachine) and \
+                            hasattr(vm.config, 'hardware'):
+                        devices = vm.config.hardware.device
+                        for device in devices:
+                            if hasattr(device.backing, 'diskMode'):
+                                device_disk_uuid = device.backing.uuid
+                                device_disk_uuid = self._normalize_uuid(
+                                    device_disk_uuid)
+                                if device_disk_uuid == disk_uuid:
+                                    volume = volume.set(
+                                        'attached_to', unicode(vm._moId))
+                                    vsphere_volume.blockDeviceVolume = volume
+                                    vsphere_volume.vm = vm
+                                    vsphere_volume.device = device
+                                    break
 
                 logging.debug(str(vsphere_volume))
                 vol_list[unicode(disk_uuid)] = vsphere_volume
