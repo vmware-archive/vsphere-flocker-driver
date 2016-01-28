@@ -13,10 +13,8 @@ from twisted.python.filepath import FilePath
 from zope.interface import implementer
 from subprocess import check_output
 from bitmath import Byte, GiB, KiB
-import socket
 import logging
-import string
-import random
+import ssl
 import uuid
 import netifaces
 import time
@@ -104,7 +102,7 @@ def get_all_ips():
     return ips
 
 
-class VsphereBlockDeviceVolume():
+class VsphereBlockDeviceVolume:
     """
     Data object representing vsphere's BlockDeviceVolume 
     """
@@ -126,7 +124,7 @@ class VsphereBlockDeviceAPI(object):
     A ``IBlockDeviceAPI`` which creates volumes (vmdks) with vsphere backend.
     """
 
-    def __init__(self, cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
+    def __init__(self, cluster_id, vc_ip, username, password, datacenter_name, datastore_name, validate_cert):
 
         self._cluster_id = cluster_id
         self._vc_ip = vc_ip
@@ -134,6 +132,7 @@ class VsphereBlockDeviceAPI(object):
         self._password = password
         self._datacenter_name = datacenter_name
         self._datastore_name = datastore_name
+        self.validate_cert = validate_cert
         logging.debug("vsphere __init__ : " + str(self._cluster_id) + ": " + self._vc_ip + ": " + self._username + ": " + self._password +
                       ": " + self._datacenter_name + ": " + self._datastore_name)
 
@@ -157,8 +156,13 @@ class VsphereBlockDeviceAPI(object):
         try:
             # Connect to VC
             # si - the root object of inventory
-            self._si = SmartConnect(host=self._vc_ip, port=443,
-                              user=self._username, pwd=self._password)
+            if self.validate_cert:
+                self._si = SmartConnect(host=self._vc_ip, port=443,
+                                        user=self._username, pwd=self._password,
+                                        sslContext=ssl._create_unverified_context())
+            else:
+                self._si = SmartConnect(host=self._vc_ip, port=443,
+                                        user=self._username, pwd=self._password)
         except vmodl.MethodFault as e:
             logging.error("Connection to VC failed with error : " + str(e))
             raise VcConnection(e)
@@ -682,7 +686,8 @@ class VsphereBlockDeviceAPI(object):
         raise GetDevicePathFailure("No device path found")
 
 
-def vsphere_from_configuration(cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
+def vsphere_from_configuration(cluster_id, vc_ip, username, password,
+                               datacenter_name, datastore_name, validate_cert):
 
     return VsphereBlockDeviceAPI(
         cluster_id=cluster_id,
@@ -690,7 +695,8 @@ def vsphere_from_configuration(cluster_id, vc_ip, username, password, datacenter
         username=username,
         password=password,
         datacenter_name=datacenter_name,
-        datastore_name=datastore_name
+        datastore_name=datastore_name,
+        validate_cert=validate_cert
     )
 
 
