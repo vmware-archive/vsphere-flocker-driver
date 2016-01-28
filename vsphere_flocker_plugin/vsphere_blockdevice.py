@@ -22,7 +22,8 @@ import netifaces
 import time
 
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',
-                    level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+                    level=logging.DEBUG,
+                    format='%(asctime)s - %(module)s - %(levelname)s - %(funcName)s: %(message)s')
 
 
 class VolumeAttached(VolumeException):
@@ -161,7 +162,6 @@ class VsphereBlockDeviceAPI(object):
         except vmodl.MethodFault as e:
             logging.error("Connection to VC failed with error : " + str(e))
             raise VcConnection(e)
-        
 
     def compute_instance_id(self):
         """
