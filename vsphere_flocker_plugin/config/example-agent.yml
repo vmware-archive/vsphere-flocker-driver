@@ -8,3 +8,4 @@ dataset:
   password: "Admin!23"
   datacenter_name: "Datacenter"
   datastore_name: "vsanDatastore"
+  validate_cert: no

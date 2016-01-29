@@ -12,7 +12,8 @@ def api_factory(cluster_id, **kwargs):
                                       password=kwargs[u'password'],
                                       datacenter_name=kwargs[
                                           u'datacenter_name'],
-                                      datastore_name=kwargs[u'datastore_name'])
+                                      datastore_name=kwargs[u'datastore_name'],
+                                      validate_cert=kwargs[u'validate_cert'])
 
 
 FLOCKER_BACKEND = BackendDescription(
