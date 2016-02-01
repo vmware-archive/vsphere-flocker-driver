@@ -27,6 +27,6 @@ setup(
     keywords='vsphere, backend, plugin, flocker, docker, python',
     url="https://github.com/vmware/vsphere-flocker-driver",
     install_requires=[
-        "pyvmomi=>5.5.0-2014.1.1",
+        "pyvmomi>=5.5.0-2014.1.1",
     ]
 )
