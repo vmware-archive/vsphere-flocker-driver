@@ -124,7 +124,7 @@ class VsphereBlockDeviceAPI(object):
     A ``IBlockDeviceAPI`` which creates volumes (vmdks) with vsphere backend.
     """
 
-    def __init__(self, cluster_id, vc_ip, username, password, datacenter_name, datastore_name, validate_cert):
+    def __init__(self, cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
 
         self._cluster_id = cluster_id
         self._vc_ip = vc_ip
@@ -132,7 +132,6 @@ class VsphereBlockDeviceAPI(object):
         self._password = password
         self._datacenter_name = datacenter_name
         self._datastore_name = datastore_name
-        self.validate_cert = validate_cert
         logging.debug("vsphere __init__ : {}; {}; {}; {}; {}".format(self._cluster_id, self._vc_ip,
                                                                      self._username, self._datacenter_name,
                                                                      self._datastore_name))
@@ -157,14 +156,9 @@ class VsphereBlockDeviceAPI(object):
         try:
             # Connect to VC
             # si - the root object of inventory
-            if self.validate_cert:
-                self._si = SmartConnect(host=self._vc_ip, port=443,
-                                        user=self._username, pwd=self._password,
-                                        sslContext=ssl._create_unverified_context())
-            else:
-                self._si = SmartConnect(host=self._vc_ip, port=443,
-                                        user=self._username, pwd=self._password)
-        except vmodl.MethodFault as e:
+            self._si = SmartConnect(host=self._vc_ip, port=443,
+                                    user=self._username, pwd=self._password)
+        except Exception as e:
             logging.error("Connection to VC failed with error : " + str(e))
             raise VcConnection(e)
 
@@ -688,7 +682,7 @@ class VsphereBlockDeviceAPI(object):
 
 
 def vsphere_from_configuration(cluster_id, vc_ip, username, password,
-                               datacenter_name, datastore_name, validate_cert):
+                               datacenter_name, datastore_name):
 
     return VsphereBlockDeviceAPI(
         cluster_id=cluster_id,
@@ -696,8 +690,7 @@ def vsphere_from_configuration(cluster_id, vc_ip, username, password,
         username=username,
         password=password,
         datacenter_name=datacenter_name,
-        datastore_name=datastore_name,
-        validate_cert=validate_cert
+        datastore_name=datastore_name
     )
 
 

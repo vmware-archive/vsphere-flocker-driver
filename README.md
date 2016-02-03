@@ -46,8 +46,7 @@ dataset:
   username: "{VC_Username}"
   password: "{VC_Password}"
   datacenter_name: "Datacenter"           # VC datacenter name
-  datastore_name: "vsphereDatastore"      # VC datastore name as above
-  validate_cert: no                       # VC SSL Cert validation  
+  datastore_name: "vsphereDatastore"      # VC datastore name as above  
 ```
 
 Please see configuration examples in the [config directory](vsphere_flocker_plugin/config/).
