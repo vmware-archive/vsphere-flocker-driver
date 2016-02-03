@@ -133,8 +133,9 @@ class VsphereBlockDeviceAPI(object):
         self._datacenter_name = datacenter_name
         self._datastore_name = datastore_name
         self.validate_cert = validate_cert
-        logging.debug("vsphere __init__ : " + str(self._cluster_id) + ": " + self._vc_ip + ": " + self._username + ": " + self._password +
-                      ": " + self._datacenter_name + ": " + self._datastore_name)
+        logging.debug("vsphere __init__ : {}; {}; {}; {}; {}".format(self._cluster_id, self._vc_ip,
+                                                                     self._username, self._datacenter_name,
+                                                                     self._datastore_name))
 
         self._connect()
 
