@@ -10,9 +10,12 @@ def api_factory(cluster_id, **kwargs):
                                       vc_ip=kwargs[u'vc_ip'],
                                       username=kwargs[u'username'],
                                       password=kwargs[u'password'],
-                                      datacenter_name=kwargs[
-                                          u'datacenter_name'],
-                                      datastore_name=kwargs[u'datastore_name'])
+                                      datacenter_name=kwargs[u'datacenter_name'],
+                                      datastore_name=kwargs[u'datastore_name'],
+                                      ssl_verify_cert=kwargs[u'ssl_verify_cert'],
+                                      ssl_key_file=kwargs[u'ssl_key_file'],
+                                      ssl_cert_file=kwargs[u'ssl_cert_file'],
+                                      ssl_thumbprint=kwargs[u'ssl_thumbprint'])
 
 
 FLOCKER_BACKEND = BackendDescription(

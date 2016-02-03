@@ -13,11 +13,11 @@ from twisted.python.filepath import FilePath
 from zope.interface import implementer
 from subprocess import check_output
 from bitmath import Byte, GiB, KiB
-import logging
-import ssl
-import uuid
 import netifaces
+import logging
+import uuid
 import time
+import ssl
 
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',
                     level=logging.DEBUG,
@@ -114,8 +114,9 @@ class VsphereBlockDeviceVolume:
         self.device = None
 
     def __str__(self):
-        return "VsphereBlockDeviceVolume: {" + str(self.blockDeviceVolume) + ", path: " + self.path + ", vm: " + str(self.vm) + ", device: " + str(self.device) + "}"
-
+        return "<VsphereBlockDeviceVolume {}, {}, {}, {}>".format(self.blockDeviceVolume,
+                                                                  self.path, self.vm,
+                                                                  self.device)
 
 @implementer(IBlockDeviceAPI)
 class VsphereBlockDeviceAPI(object):
@@ -124,7 +125,9 @@ class VsphereBlockDeviceAPI(object):
     A ``IBlockDeviceAPI`` which creates volumes (vmdks) with vsphere backend.
     """
 
-    def __init__(self, cluster_id, vc_ip, username, password, datacenter_name, datastore_name):
+    def __init__(self, cluster_id, vc_ip, username, password,
+                 datacenter_name, datastore_name, ssl_verify_cert,
+                 ssl_key_file, ssl_cert_file, ssl_thumbprint):
 
         self._cluster_id = cluster_id
         self._vc_ip = vc_ip
@@ -132,9 +135,14 @@ class VsphereBlockDeviceAPI(object):
         self._password = password
         self._datacenter_name = datacenter_name
         self._datastore_name = datastore_name
-        logging.debug("vsphere __init__ : {}; {}; {}; {}; {}".format(self._cluster_id, self._vc_ip,
-                                                                     self._username, self._datacenter_name,
-                                                                     self._datastore_name))
+        # SSL Cert verification pyvmomi 6.0+
+        self._ssl_verify_cert = ssl_verify_cert
+        self._ssl_key_file = ssl_key_file
+        self._ssl_cert_file = ssl_cert_file
+        self._ssl_thumbprint = ssl_thumbprint
+        logging.debug("Initializing {}; {}; {}; {}; {}".format(self._cluster_id, self._vc_ip,
+                                                               self._username, self._datacenter_name,
+                                                               self._datastore_name))
 
         self._connect()
 
@@ -144,22 +152,35 @@ class VsphereBlockDeviceAPI(object):
                 self._dc = childEntity
                 break
 
-        logging.debug("dc = " + str(self._dc))
+        logging.debug("Datacenter: {} ({})".format(self._dc.name, str(self._dc)))
 
         self._flocker_volume_datastore_folder = '[' + \
             self._datastore_name + ']FLOCKER/'
-        logging.debug("datastore folder = " +
-                      self._flocker_volume_datastore_folder)
+        logging.debug("Datastore folder: {}".format(self._flocker_volume_datastore_folder))
 
     def _connect(self):
 
         try:
             # Connect to VC
             # si - the root object of inventory
-            self._si = SmartConnect(host=self._vc_ip, port=443,
-                                    user=self._username, pwd=self._password)
+            logging.debug('Connecting to {} with SSL verification {}'.format(self._vc_ip,
+                                                                             self._ssl_verify_cert))
+            if self._ssl_verify_cert:
+                logging.debug('SSL Verification selected '
+                              'cert={}; key={}; thumbprint={}'.format(self._ssl_cert_file,
+                                                                      self._ssl_key_file,
+                                                                      self._ssl_thumbprint))
+                self._si = SmartConnect(host=self._vc_ip, port=443,
+                                        user=self._username, pwd=self._password,
+                                        keyFile=self._ssl_key_file,
+                                        certFile=self._ssl_cert_file,
+                                        thumbprint=self._ssl_thumbprint)
+            else:
+                self._si = SmartConnect(host=self._vc_ip, port=443,
+                                        user=self._username, pwd=self._password,
+                                        sslContext=ssl._create_unverified_context())
         except Exception as e:
-            logging.error("Connection to VC failed with error : " + str(e))
+            logging.error("Connection to VC failed with error : {}".format(e))
             raise VcConnection(e)
 
     def compute_instance_id(self):
@@ -177,13 +198,13 @@ class VsphereBlockDeviceAPI(object):
             content = self._si.RetrieveContent()
             searchIndex = content.searchIndex
             localIps = get_all_ips()
-            logging.debug("get_all_ips : " + str(localIps))
+            logging.debug("Getting local IPs: {}".format([addr for addr in localIps]))
             for localIp in localIps:
                 vms = searchIndex.FindAllByIp(
                     datacenter=self._dc, ip=localIp, vmSearch=True)
-                logging.debug("vms : " + str(vms))
+                logging.debug("Getting local VMs: {}".format(', '.join(['{} ({})'.format(vm.name, vm._moId) for vm in vms])))
                 if vms:
-                    logging.debug("instance id : " + vms[0]._moId)
+                    logging.debug("Local VM instance id: {}".format(vms[0]._moId))
                     return vms[0]._moId
         except Exception as e:
             logging.error("Could not find vm because of error : " + str(e))
@@ -196,13 +217,13 @@ class VsphereBlockDeviceAPI(object):
         """
         Return allocation unit
         """
-        logging.debug("vsphere allocation_unit: " +
+        logging.debug("vSphere allocation unit: " +
                       str(int(GiB(4).to_Byte().value)))
         return int(GiB(4).to_Byte().value)
 
     def _normalize_uuid(self, uuid):
         """
-        Normalizes the input uuid to lower-case string without any white space or '-'        
+        Normalizes the input uuid to lower-case string without any white space or '-'
         """
         uuid = uuid.translate(None, " -\n'")
         uuid = uuid.lower()
@@ -211,7 +232,7 @@ class VsphereBlockDeviceAPI(object):
     def create_volume(self, dataset_id, size):
         """
         Create a new volume.
-        Creates a new vmdk volume on vSphere datastore provided in the configuration     
+        Creates a new vmdk volume on vSphere datastore provided in the configuration
         :param UUID dataset_id: The Flocker dataset ID of the dataset on this
             volume.
         :param int size: The size of the new volume in bytes.
@@ -226,33 +247,38 @@ class VsphereBlockDeviceAPI(object):
             fileBackedVirtualDiskSpec = vim.VirtualDiskManager.FileBackedVirtualDiskSpec()
             fileBackedVirtualDiskSpec.capacityKb = int(
                 Byte(size).to_KiB().value)
-            logging.debug("capacityKb = " +
-                          str(fileBackedVirtualDiskSpec.capacityKb))
-            fileBackedVirtualDiskSpec.adapterType = 'lsiLogic'
-            fileBackedVirtualDiskSpec.diskType = 'thick'
+            # Using vim enums
+            fileBackedVirtualDiskSpec.adapterType = vim.VirtualDiskManager.VirtualDiskAdapterType.lsiLogic
+            fileBackedVirtualDiskSpec.diskType = vim.VirtualDiskManager.VirtualDiskType.thick
+            logging.debug("Creating VMDK capacityKb: {}; adapterType: {}; "
+                          "diskType: {}".format(str(fileBackedVirtualDiskSpec.capacityKb),
+                                                fileBackedVirtualDiskSpec.adapterType,
+                                                fileBackedVirtualDiskSpec.diskType))
 
             path_name = self._flocker_volume_datastore_folder + \
                 str(dataset_id) + ".vmdk"
-            logging.debug(path_name)
+
             new_disk = [virtualDiskManager.CreateVirtualDisk_Task(
                 name=path_name, datacenter=self._dc, spec=fileBackedVirtualDiskSpec)]
             self._wait_for_tasks(new_disk, self._si)
-            logging.debug("VMDK created successfully")
+
+            logging.debug("VMDK {} created successfully".format(path_name))
             uuid = virtualDiskManager.QueryVirtualDiskUuid(
                 name=path_name, datacenter=self._dc)
-            logging.debug(str(uuid))
+            logging.debug("VMDK {} UUID: {}".format(path_name, str(uuid)))
         except Exception as e:
             logging.error(
                 "Cannot create volume because of exception : " + str(e))
             raise VolumeCreationFailure(e)
-
+        # normalizing uuid
         uuid = self._normalize_uuid(uuid)
-        logging.debug(uuid)
+        logging.debug("VMDK {} UUID normalized {}".format(path_name, uuid))
+        # creating flocker block device volume
         volume = BlockDeviceVolume(
             size=size,
             dataset_id=dataset_id,
             blockdevice_id=unicode(uuid))
-        logging.debug("vsphere create_volume: " + volume.blockdevice_id)
+        logging.debug("vSphere Block Device Volume ID {}".format(volume.blockdevice_id))
         return volume
 
     def _wait_for_tasks(self, tasks, si):
@@ -295,7 +321,7 @@ class VsphereBlockDeviceAPI(object):
                                 continue
 
                             if state == vim.TaskInfo.State.success:
-                                logging.debug(task.info.result)
+                                logging.debug("{} ".format(task.info.result))
                                 # Remove task from taskList
                                 taskList.remove(str(task))
                             elif state == vim.TaskInfo.State.error:
@@ -313,45 +339,87 @@ class VsphereBlockDeviceAPI(object):
                 return datastore
 
     def _find_vm(self, moid):
-        for vm in self._find_all_vms():
-            if unicode(vm._moId) == moid:
-                return vm
+        for vm in self._get_all_vms():
+            if unicode(vm['moref']._moId) == moid:
+                return vm['moref']
 
-    def _find_all_vms(self):
-        vmFolder = self._dc.vmFolder
-        children = vmFolder.childEntity
-        vms = []
-        for child in children:
-            self._search_all_vms(child, vms)
-        logging.debug(str(vms))
+    def _get_all_vms(self):
+        """ Gets list of VMs in current vCenter instance
+        :return: list of vms
+        """
+        start_time = time.time()
+        vms = self._get_properties_from_vc([vim.VirtualMachine],
+                                           ['name', 'config.hardware'],
+                                           vim.VirtualMachine)
+        logging.debug("Took {} seconds".format(time.time() - start_time))
         return vms
 
-    def _search_all_vms(self, child, vms):
-
-        if hasattr(child, 'childEntity'):
-            for childEntity in child.childEntity:
-                self._search_all_vms(childEntity, vms)
-        else:
-            vms.append(child)
+    def _get_properties_from_vc(self, viewType, props, specType):
+        """ Obtains a list of specific properties for a
+        particular Managed Object Reference data object.
+        :param content: ServiceInstance Managed Object
+        :param viewType: Type of Managed Object Reference
+                         that should populate the View
+        :param props: A list of properties that should be
+                     retrieved for the entity
+        :param specType: Type of Managed Object Reference
+                         that should be used for the Property
+                         Specification
+        :return:
+        """
+        content = self._si.RetrieveContent()
+        # Build a view and get basic properties for all Virtual Machines
+        objView = content.viewManager.CreateContainerView(content.rootFolder, viewType, True)
+        tSpec = vim.PropertyCollector.TraversalSpec(name='tSpecName',
+                                                    path='view',
+                                                    skip=False,
+                                                    type=vim.view.ContainerView)
+        pSpec = vim.PropertyCollector.PropertySpec(all=False,
+                                                   pathSet=props,
+                                                   type=specType)
+        oSpec = vim.PropertyCollector.ObjectSpec(obj=objView,
+                                                 selectSet=[tSpec],
+                                                 skip=False)
+        pfSpec = vim.PropertyCollector.FilterSpec(objectSet=[oSpec],
+                                                  propSet=[pSpec],
+                                                  reportMissingObjectsInResults=False)
+        retOptions = vim.PropertyCollector.RetrieveOptions()
+        totalProps = []
+        retProps = content.propertyCollector.RetrievePropertiesEx(specSet=[pfSpec],
+                                                                  options=retOptions)
+        totalProps += retProps.objects
+        while retProps.token:
+            retProps = content.propertyCollector.ContinueRetrievePropertiesEx(token=retProps.token)
+            totalProps += retProps.objects
+        objView.Destroy()
+        # Turn the output in retProps into a usable dictionary of values
+        gpOutput = []
+        for eachProp in totalProps:
+            propDic = {}
+            for prop in eachProp.propSet:
+                propDic[prop.name] = prop.val
+            propDic['moref'] = eachProp.obj
+            gpOutput.append(propDic)
+        return gpOutput
 
     def _get_vsphere_blockdevice_volume(self, blockdevice_id):
-
+        logging.debug("Looking for {}", blockdevice_id)
         vol_list = self._list_vsphere_volumes()
-        if not blockdevice_id in vol_list.keys():
+        if blockdevice_id not in vol_list.keys():
             logging.error(
-                "Volume not found for blockdevice_id : " + blockdevice_id)
+                "Volume not found for BlockDevice ID {} ".format(blockdevice_id))
             raise UnknownVolume(blockdevice_id)
-
         return vol_list[blockdevice_id]
 
-    def _delete_vmdk(self, vsphere_volume):
+    def _delete_vmdk(self, vsphere_volume, blockdevice_id):
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
         tasks = [virtualDiskManager.DeleteVirtualDisk_Task(
             name=vsphere_volume.path, datacenter=self._dc)]
         self._wait_for_tasks(tasks, self._si)
-        logging.debug("VMDK deleted successfully")
-        logging.debug("vsphere destroy_volume: " + str(blockdevice_id))
+        logging.debug("VMDK {} with Block device Volume "
+                      "{} deleted successfully".format(vsphere_volume,
+                                                       blockdevice_id))
 
     def destroy_volume(self, blockdevice_id):
         """
@@ -370,12 +438,13 @@ class VsphereBlockDeviceAPI(object):
             raise VolumeAttached(blockdevice_id)
 
         try:
-            self._delete_vmdk(vsphere_volume)
+            self._delete_vmdk(vsphere_volume, blockdevice_id)
         except Exception as e:
             logging.error("Destroy volume failed due to error " + str(e))
             raise VolumeDestroyFailure(e)
 
     def _attach_vmdk(self, vm, vsphere_volume):
+        logging.debug('vSphere volume {} will be attached to {}'.format(vsphere_volume, vm))
         spec = vim.vm.ConfigSpec()
         # get all disks on a VM, set unit_number to the next available
         for dev in vm.config.hardware.device:
@@ -413,6 +482,7 @@ class VsphereBlockDeviceAPI(object):
 
         volume = vsphere_volume.blockDeviceVolume
         attached_volume = volume.set('attached_to', unicode(vm._moId))
+        logging.debug('vSphere volume {} attached to {} successfully'.format(vsphere_volume, vm))
         return attached_volume
 
     def attach_volume(self, blockdevice_id, attach_to):
@@ -434,32 +504,38 @@ class VsphereBlockDeviceAPI(object):
         :returns: A ``BlockDeviceVolume`` with a ``attached_to`` attribute set
             to ``attach_to``.
         """
+        logging.debug("Attaching {} to {}".format(blockdevice_id,
+                                                  attach_to))
         vm = self._find_vm(attach_to)
-        if vm is None:
-            raise UnknownVm("VM not found " + str(attach_to))
-
-        logging.debug(str(vm))
-
-        vsphere_volume = self._get_vsphere_blockdevice_volume(blockdevice_id)
-        if vsphere_volume.blockDeviceVolume.attached_to is not None:
-            logging.error("Volume is attached to a vm so cannot attach.")
-            raise AlreadyAttachedVolume(blockdevice_id)
-
         try:
-            attached_volume = self._attach_vmdk(vm, vsphere_volume)
-        except Exception as e:
-            logging.error(
-                "Cannot attach volume because of exception : " + str(e))
-            raise VolumeAttachFailure(e)
+            if vm is None:
+                raise UnknownVm("VM not found {}".format(attach_to))
 
-        logging.debug("attached_to=" + attached_volume.attached_to)
-        logging.debug("vsphere attach_volume: " +
-                      str(blockdevice_id) + " : " + attach_to)
-        logging.debug(str(attached_volume))
+            vsphere_volume = self._get_vsphere_blockdevice_volume(blockdevice_id)
+            if vsphere_volume.blockDeviceVolume.attached_to is not None:
+                logging.error("Volume is attached to a vm so cannot attach.")
+                raise AlreadyAttachedVolume(blockdevice_id)
 
-        logging.debug("Rescanning scsi bus for attached disk")
-        self._rescan_scsi()
-        return attached_volume
+            try:
+                attached_volume = self._attach_vmdk(vm, vsphere_volume)
+            except Exception as e:
+                logging.error("Cannot attach volume {} to {} "
+                              "because of exception: {}".format(blockdevice_id,
+                                                                attach_to, e))
+                raise VolumeAttachFailure(e)
+
+            logging.debug("Volume attached to {}".format(attached_volume.attached_to))
+            logging.debug("Block Device {} will be attached to {} {}".format(blockdevice_id,
+                                                                             attach_to,
+                                                                             attached_volume))
+            logging.debug("Rescanning scsi bus for attached disk")
+            self._rescan_scsi()
+            return attached_volume
+        except Exception, ex:
+            logging.error('An error occurred attaching volume {} to {}: {}'.format(blockdevice_id,
+                                                                                   attach_to,
+                                                                                   ex))
+            raise VolumeAttachFailure(ex)
 
     def _rescan_scsi(self):
         try:
@@ -507,11 +583,11 @@ class VsphereBlockDeviceAPI(object):
         try:
             detached_volume = self._detach_vmdk(vsphere_volume)
         except Exception as e:
-            logging.error("Detach volume failed with error: " + str(e))
+            logging.error("Detach volume {} failed with error: {}".format(detached_volume, e))
             raise VolumeDetachFailure(e)
 
         self._rescan_scsi()
-        logging.debug("vsphere detach_volume: " + blockdevice_id)
+        logging.debug("Volume {} successfully detached." .format(blockdevice_id))
 
     def _find_virtual_disks(self):
         datastore = self._find_datastore()
@@ -540,12 +616,17 @@ class VsphereBlockDeviceAPI(object):
             datastorePath=self._flocker_volume_datastore_folder, searchSpec=searchSpec)]
         self._wait_for_tasks(searchResultsTask, self._si)
         searchResults = searchResultsTask[0].info.result
-        logging.debug("_find_virtual_disks : " + str(searchResults))
+        logging.debug("Virtual Disks: {}".format(", ".join([str(sr.file) for sr in searchResults])))
         return searchResults
 
     def _list_vsphere_volumes(self):
-        vms = self._find_all_vms()
-
+        """ Lists vsphere volumes in configured
+            datastore only.
+        :return:
+        """
+        datastore = self._find_datastore()
+        vms = datastore.vm
+        logging.debug('Found {} VMs'.format(len(vms)))
         searchResults = self._find_virtual_disks()
         content = self._si.RetrieveContent()
         virtualDiskManager = content.virtualDiskManager
@@ -553,17 +634,15 @@ class VsphereBlockDeviceAPI(object):
         vol_list = {}
         for result in searchResults:
             for file in result.file:
-                logging.debug(str(file))
                 volume_path = result.folderPath + file.path
                 disk_uuid = virtualDiskManager.QueryVirtualDiskUuid(
                     name=volume_path, datacenter=self._dc)
                 disk_uuid = self._normalize_uuid(disk_uuid)
                 str_dataset_id = file.path
                 str_dataset_id = str_dataset_id[:-5]
-                logging.debug(str_dataset_id)
+                # logging.debug(str_dataset_id)
                 dataset_id = uuid.UUID(str_dataset_id)
-                logging.debug(dataset_id)
-
+                # logging.debug(dataset_id)
                 volume = BlockDeviceVolume(
                     size=int(KiB(file.capacityKb).to_Byte().value),
                     dataset_id=dataset_id,
@@ -586,11 +665,10 @@ class VsphereBlockDeviceAPI(object):
                                     vsphere_volume.vm = vm
                                     vsphere_volume.device = device
                                     break
-
-                logging.debug(str(vsphere_volume))
                 vol_list[unicode(disk_uuid)] = vsphere_volume
 
-        logging.debug(str(vol_list))
+        logging.debug("Found {} vSphere volumes: {}".format(len(vol_list),
+                                                            '.'.join(vol_list.keys())))
         return vol_list
 
     def list_volumes(self):
@@ -600,22 +678,23 @@ class VsphereBlockDeviceAPI(object):
         :returns: A ``list`` of ``BlockDeviceVolume``s.
         """
         try:
-            logging.debug("starting list volumes")
+            logging.debug("List Volumes started")
             start_time = time.time()
             vol_list = self._list_vsphere_volumes()
             volumes = []
             for volume in vol_list.values():
                 volumes.append(volume.blockDeviceVolume)
 
-            logging.debug("vsphere list_volumes: " + str(volumes))
-            logging.debug(start_time)
-            logging.debug("Took %s seconds" % (time.time() - start_time))
+            logging.debug("vSphere Volumes found {}: {}".format(len(volumes),
+                                                                str(volumes)))
+            logging.debug("List volumes finished. Took {} seconds".format(time.time() - start_time))
             return volumes
         except Exception as e:
             logging.error("List volumes failed with error: " + str(e))
             raise ListVolumesFailure(e)
 
     def _find_all_disk_devices(self):
+        logging.debug("Executing lsblk -d -o KNAME,TYPE")
         output = check_output(["lsblk", "-d", "-o", "KNAME,TYPE"])
         logging.debug(output)
         lines = output.split("\n")
@@ -629,10 +708,10 @@ class VsphereBlockDeviceAPI(object):
         logging.debug(lines)
         for line in lines:
             data = line.split()
-            if(data[1] == "disk"):
+            if data[1] == "disk":
                 devices.append("/dev/" + data[0])
 
-        logging.debug(devices)
+        logging.debug('Devices found: {}'.format('.'.join(devices)))
         return devices
 
     def get_device_path(self, blockdevice_id):
@@ -657,14 +736,15 @@ class VsphereBlockDeviceAPI(object):
             devices = self._find_all_disk_devices()
             for device in devices:
                 try:
+                    logging.debug("Executing scsiinfo -s {} ".format(device))
                     output = check_output(["scsiinfo", "-s", device])
                     logging.debug(output)
-                except:
-                    logging.error("Error occured for scsiinfo -s " + device)
+                except Exception, ex:
+                    logging.error("Error occured for scsiinfo -s {}: {}".format(device, ex))
                     continue
                 serial_id_line_index = output.find("'")
                 if serial_id_line_index < 0:
-                    logging.debug("No serial id found for device : " + device)
+                    logging.debug("No serial id found for device: {}".format(device))
                     continue
                 serial_id = output[serial_id_line_index:]
                 logging.debug(serial_id)
@@ -672,17 +752,19 @@ class VsphereBlockDeviceAPI(object):
                 logging.debug(uid)
                 logging.debug(blockdevice_id)
                 if str(uid) == str(blockdevice_id):
-                    logging.debug("Found device path : " + device)
+                    logging.debug("Found device path {}".format(device))
                     return FilePath(device)
-        except Exception as e:
-            logging.error("Get device path failed with error : " + str(e))
-            raise GetDevicePathFailure(e)
+        except Exception, ex:
+            logging.error("Get device path failed with error: {}".format(ex))
+            raise GetDevicePathFailure(ex)
 
         raise GetDevicePathFailure("No device path found")
 
 
 def vsphere_from_configuration(cluster_id, vc_ip, username, password,
-                               datacenter_name, datastore_name):
+                               datacenter_name, datastore_name,
+                               ssl_verify_cert, ssl_key_file,
+                               ssl_cert_file, ssl_thumbprint):
 
     return VsphereBlockDeviceAPI(
         cluster_id=cluster_id,
@@ -690,7 +772,11 @@ def vsphere_from_configuration(cluster_id, vc_ip, username, password,
         username=username,
         password=password,
         datacenter_name=datacenter_name,
-        datastore_name=datastore_name
+        datastore_name=datastore_name,
+        ssl_verify_cert=ssl_verify_cert,
+        ssl_key_file=ssl_key_file,
+        ssl_cert_file=ssl_cert_file,
+        ssl_thumbprint=ssl_thumbprint
     )
 
 
@@ -700,7 +786,11 @@ def main():
                                     username=u'Administrator@vsphere.local',
                                     password=u'Admin!23',
                                     datacenter_name="Datacenter",
-                                    datastore_name="vsanDatastore")
+                                    datastore_name="vsanDatastore",
+                                    ssl_verify_cert=False,
+                                    ssl_key_file='',
+                                    ssl_cert_file='',
+                                    ssl_thumbprint='')
     volume = vs.create_volume(dataset_id=uuid.uuid4(), size=21474836480)
     vs.list_volumes()
     vm = vs.compute_instance_id()
