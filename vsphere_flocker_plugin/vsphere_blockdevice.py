@@ -206,12 +206,14 @@ class VsphereBlockDeviceAPI(object):
                       str(int(GiB(4).to_Byte().value)))
         return int(GiB(4).to_Byte().value)
 
-    def _normalize_uuid(self, uuid):
+    @staticmethod
+    def _normalize_uuid(uuid):
         """
-        Normalizes the input uuid to lower-case string without any white space or '-'
+        Normalizes the input uuid to lower-case string
+        without any white space or '-'
         """
-        uuid = uuid.translate(None, " -\n'")
-        uuid = uuid.lower()
+        if uuid:
+            uuid = uuid.translate(None, " -\n'").lower()
         return uuid
 
     def create_volume(self, dataset_id, size):
