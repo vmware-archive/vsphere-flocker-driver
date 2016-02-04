@@ -7,7 +7,7 @@ from flocker.node.agents.blockdevice import (
     IBlockDeviceAPI, BlockDeviceVolume
 )
 from pyVmomi import vim, vmodl
-from pyVim.connect import SmartConnect, Disconnect
+from pyVim.connect import SmartConnect
 
 from twisted.python.filepath import FilePath
 from zope.interface import implementer
@@ -62,7 +62,7 @@ class VolumeDestroyFailure(Exception):
 
 class VolumeAttachFailure(Exception):
     """
-    attach volume failed 
+    attach volume failed
     """
 
 
@@ -104,7 +104,7 @@ def get_all_ips():
 
 class VsphereBlockDeviceVolume:
     """
-    Data object representing vsphere's BlockDeviceVolume 
+    Data object representing vsphere's BlockDeviceVolume
     """
 
     def __init__(self, blockDeviceVolume, path):
@@ -206,18 +206,20 @@ class VsphereBlockDeviceAPI(object):
                       str(int(GiB(4).to_Byte().value)))
         return int(GiB(4).to_Byte().value)
 
-    def _normalize_uuid(self, uuid):
+    @staticmethod
+    def _normalize_uuid(uuid):
         """
-        Normalizes the input uuid to lower-case string without any white space or '-'        
+        Normalizes the input uuid to lower-case string
+        without any white space or '-'
         """
-        uuid = uuid.translate(None, " -\n'")
-        uuid = uuid.lower()
+        if uuid:
+            uuid = uuid.translate(None, " -\n'").lower()
         return uuid
 
     def create_volume(self, dataset_id, size):
         """
         Create a new volume.
-        Creates a new vmdk volume on vSphere datastore provided in the configuration     
+        Creates a new vmdk volume on vSphere datastore provided in the configuration
         :param UUID dataset_id: The Flocker dataset ID of the dataset on this
             volume.
         :param int size: The size of the new volume in bytes.
