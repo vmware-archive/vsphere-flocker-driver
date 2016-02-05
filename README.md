@@ -12,7 +12,7 @@
   - Let the name of the datastore be say: `vsphereDatastore`
   - Create directory with name "FLOCKER" on this datastore. Flocker volumes will reside in this path.
     `[vsphereDatastore] FLOCKER`
-  - VMWare pyVmomi 6.0.0 (python 2.7.9+) or 5.5-2014.1.1 (python 2.7.6)
+  - VMware pyVmomi 6.0.0 (python 2.7.9+) or 5.5-2014.1.1 (python 2.7.6)
 
 ### Install:
 
