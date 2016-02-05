@@ -11,7 +11,8 @@
   - Setup a shared datastore on your VC.
   - Let the name of the datastore be say: `vsphereDatastore`
   - Create directory with name "FLOCKER" on this datastore. Flocker volumes will reside in this path.
-    `[vsphereDatastore]FLOCKER`
+    `[vsphereDatastore] FLOCKER`
+  - VMWare pyVmomi 6.0.0 (python 2.7.9+) or 5.5-2014.1.1 (python 2.7.6)
 
 ### Install:
 
@@ -26,7 +27,7 @@
      sudo apt-get install -y open-vm-tools scsitools sg3-utils
      ```
   - One of these VMs should have Flocker control service installed.
-    - Follow the Ubuntu specific steps on [this guide](https://docs.clusterhq.com/en/1.0.3/using/installing/index.html​) for installing Flocker.
+    - Follow the Ubuntu specific steps on [this guide](https://docs.clusterhq.com/en/latest/docker-integration/index.html​) for installing Flocker.
 
 
 - Steps to install `vsphere-flocker-driver`:
@@ -42,12 +43,15 @@ control-service:
   hostname: "{IP/Hostname of Flocker-Control Service}"
 dataset:
   backend: "vsphere_flocker_plugin"
-  vc_ip: "{VC_IP}"
-  username: "{VC_Username}"
-  password: "{VC_Password}"
+  vc_ip: "{VC_IP}"                        # VC IP address
+  username: "{VC_Username}"               # VC privileged user
+  password: "{VC_Password}"               # VC privileged user password
   datacenter_name: "Datacenter"           # VC datacenter name
-  datastore_name: "vsphereDatastore"      # VC datastore name as above
-  validate_cert: no                       # VC SSL Cert validation  
+  datastore_name: "vsphereDatastore"      # VC datastore name as above  
+  ssl_verify_cert: no                     # VC SSL cert verification
+  ssl_key_file: ""                        #    SSL keyfile path
+  ssl_cert_file: ""                       #    SSL certfile path
+  ssl_thumbprint: ""                      #    SSL host thumbprint
 ```
 
 Please see configuration examples in the [config directory](vsphere_flocker_plugin/config/).
