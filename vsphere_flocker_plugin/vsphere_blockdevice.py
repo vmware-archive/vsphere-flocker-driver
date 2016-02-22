@@ -7,8 +7,8 @@ from flocker.node.agents.blockdevice import (
     IBlockDeviceAPI, BlockDeviceVolume
 )
 from pyVmomi import vim, vmodl
+import atexit
 from pyVim.connect import SmartConnect, Disconnect
-
 from twisted.python.filepath import FilePath
 from zope.interface import implementer
 from subprocess import check_output
@@ -155,7 +155,7 @@ class VsphereBlockDeviceAPI(object):
         logging.debug("Datacenter: {} ({})".format(self._dc.name, str(self._dc)))
 
         self._flocker_volume_datastore_folder = '[' + \
-            self._datastore_name + ']FLOCKER/'
+            self._datastore_name + '] FLOCKER/'
         logging.debug("Datastore folder: {}".format(self._flocker_volume_datastore_folder))
 
     def _connect(self):
@@ -165,7 +165,8 @@ class VsphereBlockDeviceAPI(object):
             # si - the root object of inventory
             logging.debug('Connecting to {} with SSL verification {}'.format(self._vc_ip,
                                                                              self._ssl_verify_cert))
-            if self._ssl_verify_cert:
+
+            if self._ssl_verify_cert and hasattr(ssl, 'SSLContext'):
                 logging.debug('SSL Verification selected '
                               'cert={}; key={}; thumbprint={}'.format(self._ssl_cert_file,
                                                                       self._ssl_key_file,
@@ -175,10 +176,21 @@ class VsphereBlockDeviceAPI(object):
                                         keyFile=self._ssl_key_file,
                                         certFile=self._ssl_cert_file,
                                         thumbprint=self._ssl_thumbprint)
-            else:
+            elif hasattr(ssl, 'SSLContext'):
+                logging.debug('Creating unverified context with TLSv1 and no Cert')
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+                ctx.verify_mode = ssl.CERT_NONE
                 self._si = SmartConnect(host=self._vc_ip, port=443,
                                         user=self._username, pwd=self._password,
-                                        sslContext=ssl._create_unverified_context())
+                                        sslContext=ctx)
+            else:
+                logging.warning('Could not create unverified context. '
+                                'Please, make sure you have pyVmomi 5.5.0-2014.1 installed in '
+                                'order to make a successful vCenter connection.')
+                self._si = SmartConnect(host=self._vc_ip, port=443,
+                                        user=self._username, pwd=self._password)
+                atexit.register(Disconnect, self._si)
+
         except Exception as e:
             logging.error("Connection to VC failed with error : {}".format(e))
             raise VcConnection(e)
