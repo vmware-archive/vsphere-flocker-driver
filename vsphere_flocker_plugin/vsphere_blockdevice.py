@@ -737,7 +737,7 @@ class VsphereBlockDeviceAPI(object):
             for device in devices:
                 try:
                     logging.debug("Executing scsiinfo -s {} ".format(device))
-                    output = check_output(["scsiinfo", "-s", device])
+                    output = check_output(["sginfo", "-s", device])
                     logging.debug(output)
                 except Exception, ex:
                     logging.error("Error occured for scsiinfo -s {}: {}".format(device, ex))
