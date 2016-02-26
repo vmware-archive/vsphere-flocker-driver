@@ -18,7 +18,7 @@ import logging
 import uuid
 import time
 import ssl
-
+import platform
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',
                     level=logging.DEBUG,
                     format='%(asctime)s - %(module)s - %(levelname)s - %(funcName)s: %(message)s')
@@ -713,6 +713,9 @@ class VsphereBlockDeviceAPI(object):
 
         logging.debug('Devices found: {}'.format('.'.join(devices)))
         return devices
+    def get_platform(self):
+        platform_dist = platform.dist()
+        return platform_dist[0] 
 
     def get_device_path(self, blockdevice_id):
         """
@@ -737,7 +740,11 @@ class VsphereBlockDeviceAPI(object):
             for device in devices:
                 try:
                     logging.debug("Executing scsiinfo -s {} ".format(device))
-                    output = check_output(["sginfo", "-s", device])
+                    platform_dist = self.get_platform()
+                    if platform_dist == "centos":
+                        output = check_output(["sginfo", "-s", device])
+                    else:
+                        output = check_output(["scsiinfo", "-s", device])
                     logging.debug(output)
                 except Exception, ex:
                     logging.error("Error occured for scsiinfo -s {}: {}".format(device, ex))
