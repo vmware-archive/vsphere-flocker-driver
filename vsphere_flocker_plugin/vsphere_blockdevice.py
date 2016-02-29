@@ -539,7 +539,12 @@ class VsphereBlockDeviceAPI(object):
 
     def _rescan_scsi(self):
         try:
-            output = check_output(["rescan-scsi-bus", "-r"])
+            platform_dist = self.get_platform()
+            if 'centos' in platform_dist.lower():
+                output = check_output(["rescan-scsi-bus.sh", "-a"])
+                logging.debug("RESCAN SCSI BUS IN CENTOS")
+            else:
+                output = check_output(["rescan-scsi-bus", "-r"])
             logging.debug(output)
         except Exception as e:
             ''' Don't throw error during rescan-scsi-bus '''
@@ -714,7 +719,7 @@ class VsphereBlockDeviceAPI(object):
         logging.debug('Devices found: {}'.format('.'.join(devices)))
         return devices
     def get_platform(self):
-        platform_dist = platform.dist()
+        platform_dist = platform.linux_distribution()
         return platform_dist[0] 
 
     def get_device_path(self, blockdevice_id):
@@ -741,8 +746,9 @@ class VsphereBlockDeviceAPI(object):
                 try:
                     logging.debug("Executing scsiinfo -s {} ".format(device))
                     platform_dist = self.get_platform()
-                    if platform_dist == "centos":
+                    if 'centos' in platform_dist.lower():
                         output = check_output(["sginfo", "-s", device])
+                        logging.debug("SERIAL ID on CENTOS VM")
                     else:
                         output = check_output(["scsiinfo", "-s", device])
                     logging.debug(output)
