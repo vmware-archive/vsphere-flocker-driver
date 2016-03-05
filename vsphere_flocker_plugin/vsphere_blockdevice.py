@@ -261,7 +261,7 @@ class VsphereBlockDeviceAPI(object):
                 Byte(size).to_KiB().value)
             # Using vim enums
             fileBackedVirtualDiskSpec.adapterType = vim.VirtualDiskManager.VirtualDiskAdapterType.lsiLogic
-            fileBackedVirtualDiskSpec.diskType = vim.VirtualDiskManager.VirtualDiskType.thick
+            fileBackedVirtualDiskSpec.diskType = vim.VirtualDiskManager.VirtualDiskType.thin
             logging.debug("Creating VMDK capacityKb: {}; adapterType: {}; "
                           "diskType: {}".format(str(fileBackedVirtualDiskSpec.capacityKb),
                                                 fileBackedVirtualDiskSpec.adapterType,
@@ -480,7 +480,7 @@ class VsphereBlockDeviceAPI(object):
 
         disk_spec.device = vim.vm.device.VirtualDisk()
         disk_spec.device.backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
-        disk_spec.device.backing.thinProvisioned = False
+        disk_spec.device.backing.thinProvisioned = True
         disk_spec.device.backing.diskMode = 'persistent'
         disk_spec.device.backing.fileName = vsphere_volume.path
         disk_spec.device.unitNumber = unit_number
