@@ -11,6 +11,7 @@ import atexit
 from pyVim.connect import SmartConnect, Disconnect
 from twisted.python.filepath import FilePath
 from zope.interface import implementer
+import subprocess
 from subprocess import check_output
 from bitmath import Byte, GiB, KiB
 import netifaces
@@ -84,24 +85,6 @@ class GetDevicePathFailure(Exception):
     """
 
 
-def get_all_ips():
-    """
-    Find all IPs for this machine.
-    :return: ``set`` of IP address string
-    """
-    ips = set()
-    interfaces = netifaces.interfaces()
-    for interface in interfaces:
-        addresses = netifaces.ifaddresses(interface)
-        for address_family in (netifaces.AF_INET, netifaces.AF_INET6):
-            family_addresses = addresses.get(address_family)
-            if not family_addresses:
-                continue
-            for address in family_addresses:
-                ips.add(address['addr'])
-    return ips
-
-
 class VsphereBlockDeviceVolume:
     """
     Data object representing vsphere's BlockDeviceVolume 
@@ -111,12 +94,12 @@ class VsphereBlockDeviceVolume:
         self.blockDeviceVolume = blockDeviceVolume
         self.path = path
         self.vm = None
+        self.uuid = None
         self.device = None
 
     def __str__(self):
-        return "<VsphereBlockDeviceVolume {}, {}, {}, {}>".format(self.blockDeviceVolume,
-                                                                  self.path, self.vm,
-                                                                  self.device)
+        return "<VsphereBlockDeviceVolume {}, {}, {}, {}, {}>".format(
+            self.blockDeviceVolume, self.path, self.vm, self.uuid, self.device)
 
 
 @implementer(IBlockDeviceAPI)
@@ -196,32 +179,36 @@ class VsphereBlockDeviceAPI(object):
             logging.error("Connection to VC failed with error : {}".format(e))
             raise VcConnection(e)
 
+    def _get_system_uuid(self):
+        sys_uuid = ((subprocess.Popen("/usr/sbin/dmidecode -t 1|grep 'UUID'|cut -d : -f2",
+                                      shell=True,
+                                      stdout=subprocess.PIPE)
+                     ).stdout.readline()).strip('\n').strip().lower()
+        return sys_uuid
+
     def compute_instance_id(self):
         """
-        Get an identifier for this node.
+        Get the Virtual Machine instance UUid identifier for this node.
         This will be compared against ``BlockDeviceVolume.attached_to``
         to determine which volumes are locally attached and it will be used
         with ``attach_volume`` to locally attach volumes.
-        :returns: A ``unicode`` object giving a provider-specific node
-            identifier which identifies the node where the method is run.
-
-        For vsphere local VM's moref is returned as instance_id
+        :returns:  For vsphere local VM's uuid is returned as instance_id
         """
         try:
             content = self._si.RetrieveContent()
             searchIndex = content.searchIndex
-            localIps = get_all_ips()
-            logging.debug("Getting local IPs: {}".format([addr for addr in localIps]))
-            for localIp in localIps:
-                vms = searchIndex.FindAllByIp(
-                    datacenter=self._dc, ip=localIp, vmSearch=True)
-                logging.debug("Getting local VMs: {}".format(', '.join(['{} ({})'.format(vm.name, vm._moId) for vm in vms])))
-                if vms:
-                    logging.debug("Local VM instance id: {}".format(vms[0]._moId))
-                    return vms[0]._moId
+            # get BIOS uuid
+            system_uuid = self._get_system_uuid()
+            logging.debug('System UUID: {}'.format(system_uuid))
+            vm = searchIndex.FindByUuid(datacenter=None, uuid=system_uuid.lower(),
+                                        vmSearch=True, instanceUuid=False)
+            if vm:
+                vm_uuid = vm.config.instanceUuid
+                logging.debug('VM {} instance UUID: {}'.format(vm.name, vm_uuid))
+                return vm_uuid.decode('ascii')
+
         except Exception as e:
             logging.error("Could not find vm because of error : " + str(e))
-
         logging.error("This vm instance is not found in VC")
         raise VmNotFound("This vm instance is not found in VC")
 
@@ -350,70 +337,6 @@ class VsphereBlockDeviceAPI(object):
             if datastore.name == self._datastore_name:
                 return datastore
 
-    def _find_vm(self, moid):
-        for vm in self._get_all_vms():
-            if unicode(vm['moref']._moId) == moid:
-                return vm['moref']
-
-    def _get_all_vms(self):
-        """ Gets list of VMs in current vCenter instance
-        :return: list of vms
-        """
-        start_time = time.time()
-        vms = self._get_properties_from_vc([vim.VirtualMachine],
-                                           ['name', 'config.hardware'],
-                                           vim.VirtualMachine)
-        logging.debug("Took {} seconds".format(time.time() - start_time))
-        return vms
-
-    def _get_properties_from_vc(self, viewType, props, specType):
-        """ Obtains a list of specific properties for a
-        particular Managed Object Reference data object.
-        :param content: ServiceInstance Managed Object
-        :param viewType: Type of Managed Object Reference
-                         that should populate the View
-        :param props: A list of properties that should be
-                     retrieved for the entity
-        :param specType: Type of Managed Object Reference
-                         that should be used for the Property
-                         Specification
-        :return:
-        """
-        content = self._si.RetrieveContent()
-        # Build a view and get basic properties for all Virtual Machines
-        objView = content.viewManager.CreateContainerView(content.rootFolder, viewType, True)
-        tSpec = vim.PropertyCollector.TraversalSpec(name='tSpecName',
-                                                    path='view',
-                                                    skip=False,
-                                                    type=vim.view.ContainerView)
-        pSpec = vim.PropertyCollector.PropertySpec(all=False,
-                                                   pathSet=props,
-                                                   type=specType)
-        oSpec = vim.PropertyCollector.ObjectSpec(obj=objView,
-                                                 selectSet=[tSpec],
-                                                 skip=False)
-        pfSpec = vim.PropertyCollector.FilterSpec(objectSet=[oSpec],
-                                                  propSet=[pSpec],
-                                                  reportMissingObjectsInResults=False)
-        retOptions = vim.PropertyCollector.RetrieveOptions()
-        totalProps = []
-        retProps = content.propertyCollector.RetrievePropertiesEx(specSet=[pfSpec],
-                                                                  options=retOptions)
-        totalProps += retProps.objects
-        while retProps.token:
-            retProps = content.propertyCollector.ContinueRetrievePropertiesEx(token=retProps.token)
-            totalProps += retProps.objects
-        objView.Destroy()
-        # Turn the output in retProps into a usable dictionary of values
-        gpOutput = []
-        for eachProp in totalProps:
-            propDic = {}
-            for prop in eachProp.propSet:
-                propDic[prop.name] = prop.val
-            propDic['moref'] = eachProp.obj
-            gpOutput.append(propDic)
-        return gpOutput
-
     def _get_vsphere_blockdevice_volume(self, blockdevice_id):
         logging.debug("Looking for {}", blockdevice_id)
         vol_list = self._list_vsphere_volumes()
@@ -479,7 +402,8 @@ class VsphereBlockDeviceAPI(object):
         vm_device = vm.config.hardware.device
         vm_uuid = vm.config.instanceUuid
         vm_name = vm.name
-        logging.debug('vSphere volume {} will be attached to ({})'.format(vsphere_volume, vm_name, vm_uuid))
+        logging.debug('vSphere volume {} will be attached to {} ({})'.format(vsphere_volume,
+                                                                             vm_uuid, vm_name))
         controller_to_use = None
         available_units = [0]
         # setting up a baseline list
@@ -530,8 +454,10 @@ class VsphereBlockDeviceAPI(object):
         self._wait_for_tasks(tasks, self._si)
         # vsphere volume
         volume = vsphere_volume.blockDeviceVolume
-        attached_volume = volume.set('attached_to', unicode(vm._moId))
-        logging.debug('vSphere volume {} attached to {} successfully'.format(vsphere_volume, vm))
+        attached_volume = volume.set('attached_to', unicode(vm.config.instanceUuid))
+        logging.debug('vSphere volume {} attached to {} ({}) successfully'.format(vsphere_volume,
+                                                                                  vm.config.instanceUuid,
+                                                                                  vm.name))
         return attached_volume
 
     def attach_volume(self, blockdevice_id, attach_to):
@@ -555,7 +481,8 @@ class VsphereBlockDeviceAPI(object):
         """
         logging.debug("Attaching {} to {}".format(blockdevice_id,
                                                   attach_to))
-        vm = self._find_vm(attach_to)
+        vm = self._si.content.searchIndex.FindByUuid(datacenter=None, uuid=attach_to,
+                                                     vmSearch=True, instanceUuid=True)
         try:
             if vm is None:
                 raise UnknownVm("VM not found {}".format(attach_to))
@@ -568,9 +495,10 @@ class VsphereBlockDeviceAPI(object):
             try:
                 attached_volume = self._attach_vmdk(vm, vsphere_volume)
             except Exception as e:
-                logging.error("Cannot attach volume {} to {} "
+                logging.error("Cannot attach volume {} to {} ({}) "
                               "because of exception: {}".format(blockdevice_id,
-                                                                attach_to, e))
+                                                                attach_to, vm.name,
+                                                                e))
                 raise VolumeAttachFailure(e)
 
             logging.debug("Volume attached to {}".format(attached_volume.attached_to))
@@ -709,9 +637,10 @@ class VsphereBlockDeviceAPI(object):
                                     device_disk_uuid)
                                 if device_disk_uuid == disk_uuid:
                                     volume = volume.set(
-                                        'attached_to', unicode(vm._moId))
+                                        'attached_to', unicode(vm.config.instanceUuid))
                                     vsphere_volume.blockDeviceVolume = volume
                                     vsphere_volume.vm = vm
+                                    vsphere_volume.uuid = vm.config.instanceUuid
                                     vsphere_volume.device = device
                                     break
                 vol_list[unicode(disk_uuid)] = vsphere_volume
