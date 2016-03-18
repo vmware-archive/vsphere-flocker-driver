@@ -118,6 +118,7 @@ class VsphereBlockDeviceVolume:
                                                                   self.path, self.vm,
                                                                   self.device)
 
+
 @implementer(IBlockDeviceAPI)
 class VsphereBlockDeviceAPI(object):
 
@@ -220,7 +221,6 @@ class VsphereBlockDeviceAPI(object):
                     return vms[0]._moId
         except Exception as e:
             logging.error("Could not find vm because of error : " + str(e))
-            raise VmNotFound(e)
 
         logging.error("This vm instance is not found in VC")
         raise VmNotFound("This vm instance is not found in VC")
@@ -433,6 +433,26 @@ class VsphereBlockDeviceAPI(object):
                       "{} deleted successfully".format(vsphere_volume,
                                                        blockdevice_id))
 
+    def _create_new_scsi_controller(self, si, vm_obj):
+        """ Creates SCSI controller
+        :param si: Service Instance Object
+        :type si: vim.ServiceInstance
+        :param vm_obj: Virtual Machine Object
+        :param vm_obj: vim.VirtualMachine
+        :return:
+        """
+        scsi_controller = vim.vm.device.VirtualLsiLogicController()
+        scsi_controller.sharedBus = vim.vm.device.VirtualSCSIController.Sharing.noSharing
+        scsi_controller.key = 1  # since no scsi controllers exist
+        scsi_controller_spec = vim.vm.device.VirtualDeviceSpec()
+        scsi_controller_spec.device = scsi_controller
+        scsi_controller_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+        # Adding new scsi controller to device_change
+        spec = vim.vm.ConfigSpec()
+        spec.deviceChange = [scsi_controller_spec]
+        self.wait_for_tasks(si, [vm_obj.ReconfigVM_Task(spec=spec)])
+        return True
+
     def destroy_volume(self, blockdevice_id):
         """
         Destroy an existing volume.
@@ -456,42 +476,59 @@ class VsphereBlockDeviceAPI(object):
             raise VolumeDestroyFailure(e)
 
     def _attach_vmdk(self, vm, vsphere_volume):
-        logging.debug('vSphere volume {} will be attached to {}'.format(vsphere_volume, vm))
-        spec = vim.vm.ConfigSpec()
-        # get all disks on a VM, set unit_number to the next available
-        for dev in vm.config.hardware.device:
-            if hasattr(dev.backing, 'fileName'):
-                unit_number = int(dev.unitNumber) + 1
-                # unit_number 7 reserved for scsi controller
-                if unit_number == 7:
-                    unit_number += 1
-                if unit_number >= 16:
-                    logging.debug("we don't support more than 15 disks")
-                    raise Exception("VM doesn't support more than 15 disks")
-
+        vm_device = vm.config.hardware.device
+        vm_uuid = vm.config.instanceUuid
+        vm_name = vm.name
+        logging.debug('vSphere volume {} will be attached to ({})'.format(vsphere_volume, vm_name, vm_uuid))
+        controller_to_use = None
+        available_units = [0]
+        # setting up a baseline list
+        base_unit_range = range(0, 16)  # disks per controller
+        base_unit_range.remove(7)  # unit_number 7 reserved for scsi controller
+        # get relationship controller - disk
+        devices = []
+        for dev in vm_device:
             if isinstance(dev, vim.vm.device.VirtualSCSIController):
-                controller = dev
+                devices.append({'controller': dev,
+                                'devices': [d.unitNumber for d in vm_device for k in dev.device if k == d.key]})
+        # getting any available slots in existing controllers
+        for controller in devices:
+            available = set(base_unit_range) - set(controller['devices'])
+            if available:
+                controller_to_use = controller['controller']
+                available_units = list(available)
+                break
+        # Creates controller if none available
+        if not controller_to_use:
+            # Either there are no available slots or
+            # does not have SCSI controller
+            self._create_new_scsi_controller(self._si, vm)
+            vm = self._si.content.searchIndex.FindByUuid(None, vm_uuid, True, True)
+            controller_to_use = [dev for dev in vm.config.hardware.device
+                                 if isinstance(dev, vim.vm.device.VirtualSCSIController)][0]
+            logging.debug('New SCSI controller created: {}'.format(controller_to_use.deviceInfo.label))
 
-        dev_changes = []
-        new_disk_kb = int(
-            Byte(vsphere_volume.blockDeviceVolume.size).to_KiB().value)
+        logging.debug('SCSI controller to use: {}'.format(controller_to_use.deviceInfo.label))
+
+        new_disk_kb = int(Byte(vsphere_volume.blockDeviceVolume.size).to_KiB().value)
         disk_spec = vim.vm.device.VirtualDeviceSpec()
         disk_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
-
+        # device config
         disk_spec.device = vim.vm.device.VirtualDisk()
+        disk_spec.device.unitNumber = available_units[0]
+        disk_spec.device.capacityInKB = new_disk_kb
+        disk_spec.device.controllerKey = controller_to_use.key
+        # device backing info
         disk_spec.device.backing = vim.vm.device.VirtualDisk.FlatVer2BackingInfo()
         disk_spec.device.backing.thinProvisioned = True
-        disk_spec.device.backing.diskMode = 'persistent'
+        disk_spec.device.backing.diskMode = vim.vm.device.VirtualDiskOption.DiskMode.persistent
         disk_spec.device.backing.fileName = vsphere_volume.path
-        disk_spec.device.unitNumber = unit_number
-
-        disk_spec.device.capacityInKB = new_disk_kb
-        disk_spec.device.controllerKey = controller.key
-        dev_changes.append(disk_spec)
-        spec.deviceChange = dev_changes
+        # Submitting config spec
+        spec = vim.vm.ConfigSpec()
+        spec.deviceChange = [disk_spec]
         tasks = [vm.ReconfigVM_Task(spec=spec)]
         self._wait_for_tasks(tasks, self._si)
-
+        # vsphere volume
         volume = vsphere_volume.blockDeviceVolume
         attached_volume = volume.set('attached_to', unicode(vm._moId))
         logging.debug('vSphere volume {} attached to {} successfully'.format(vsphere_volume, vm))
