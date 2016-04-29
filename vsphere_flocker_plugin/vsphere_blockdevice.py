@@ -19,7 +19,7 @@ import logging
 import uuid
 import time
 import ssl
-
+import platform
 logging.basicConfig(filename='/var/log/flocker/vsphere.log',
                     level=logging.DEBUG,
                     format='%(asctime)s - %(module)s - %(levelname)s - %(funcName)s: %(message)s')
@@ -516,7 +516,12 @@ class VsphereBlockDeviceAPI(object):
 
     def _rescan_scsi(self):
         try:
-            output = check_output(["rescan-scsi-bus", "-r"])
+            platform_dist = self.get_platform()
+            if 'centos' in platform_dist.lower():
+                output = check_output(["rescan-scsi-bus.sh", "-a"])
+                logging.debug("RESCAN SCSI BUS IN CENTOS")
+            else:
+                output = check_output(["rescan-scsi-bus", "-r"])
             logging.debug(output)
         except Exception as e:
             ''' Don't throw error during rescan-scsi-bus '''
@@ -691,6 +696,9 @@ class VsphereBlockDeviceAPI(object):
 
         logging.debug('Devices found: {}'.format('.'.join(devices)))
         return devices
+    def get_platform(self):
+        platform_dist = platform.linux_distribution()
+        return platform_dist[0] 
 
     def get_device_path(self, blockdevice_id):
         """
@@ -715,7 +723,12 @@ class VsphereBlockDeviceAPI(object):
             for device in devices:
                 try:
                     logging.debug("Executing scsiinfo -s {} ".format(device))
-                    output = check_output(["scsiinfo", "-s", device])
+                    platform_dist = self.get_platform()
+                    if 'centos' in platform_dist.lower():
+                        output = check_output(["sginfo", "-s", device])
+                        logging.debug("SERIAL ID on CENTOS VM")
+                    else:
+                        output = check_output(["scsiinfo", "-s", device])
                     logging.debug(output)
                 except Exception, ex:
                     logging.error("Error occured for scsiinfo -s {}: {}".format(device, ex))
