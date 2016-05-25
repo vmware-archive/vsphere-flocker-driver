@@ -680,22 +680,22 @@ class VsphereBlockDeviceAPI(object):
         logging.debug("Executing lsblk -d -o KNAME,TYPE")
         output = check_output(["lsblk", "-d", "-o", "KNAME,TYPE"])
         logging.debug(output)
-        lines = output.split("\n")
+        # remove 1st entry [KNAME, TYPE]
+        # remove last empty entry
+        lines = output.split('\n')[1:-1]
         logging.debug(lines)
         devices = []
-        # remove 1st entry [KNAME, TYPE]
-        del lines[0]
-        # remove last empty entry
-        del lines[-1]
-        # extract only those devices where type = disk
+        # extract only those devices where type = disk and
+        # KNAME not floppy
         logging.debug(lines)
         for line in lines:
             data = line.split()
-            if data[1] == "disk":
+            if data[1] == "disk" and 'fd' not in data[0]:
                 devices.append("/dev/" + data[0])
 
-        logging.debug('Devices found: {}'.format('.'.join(devices)))
+        logging.debug('Devices found: {}'.format('; '.join(devices)))
         return devices
+
     def get_platform(self):
         platform_dist = platform.linux_distribution()
         return platform_dist[0] 
