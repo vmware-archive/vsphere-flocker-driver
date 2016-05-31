@@ -1,3 +1,5 @@
+# VMware vSphere now supports Native Docker Volumes. Download latest vSphere Docker Volume Driver from [here](https://github.com/vmware/docker-volume-vsphere)
+
 # [VMware vSphere®](http://www.vmware.com/products/vsphere) [Flocker](https://clusterhq.com/flocker/introduction/) Driver
 
 ![vSphere Flocker Integration]
